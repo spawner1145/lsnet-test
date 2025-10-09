@@ -1,0 +1,27 @@
+# 画师风格分类与聚类项目依赖
+# 基于LSNet的requirements.txt，添加聚类相关依赖
+
+# 深度学习框架
+torch>=1.10.0
+torchvision>=0.11.0
+
+# timm库（用于模型构建和训练）
+timm>=0.6.0
+
+# 数据处理
+numpy>=1.19.0
+Pillow>=8.0.0
+
+# 聚类和机器学习
+scikit-learn>=1.0.0
+
+# 可视化
+matplotlib>=3.3.0
+seaborn>=0.11.0
+
+# 其他工具
+tqdm>=4.60.0
+
+# 可选：加速训练
+# tensorboard>=2.8.0
+# apex  # 混合精度训练（需要从源码安装）
