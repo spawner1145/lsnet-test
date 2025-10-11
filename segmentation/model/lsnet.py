@@ -2,7 +2,7 @@ import torch
 import itertools
 
 from timm.models.vision_transformer import trunc_normal_
-from timm.models.layers import SqueezeExcite
+from timm.layers import SqueezeExcite
 import numpy as np
 import itertools
 

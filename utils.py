@@ -1,11 +1,15 @@
 import io
 import os
 import time
-from collections import defaultdict, deque
+from collections import defaultdict, deque, OrderedDict
 import datetime
+import logging
 
 import torch
 import torch.distributed as dist
+
+
+logger = logging.getLogger(__name__)
 
 
 class SmoothedValue(object):
@@ -156,6 +160,21 @@ def _load_checkpoint_for_ema(model_ema, checkpoint):
     """
     Workaround for ModelEma._load_checkpoint to accept an already-loaded object
     """
+    if checkpoint is None:
+        return
+
+    if isinstance(checkpoint, dict) and 'state_dict_ema' not in checkpoint:
+        new_state_dict = OrderedDict()
+        for k, v in checkpoint.items():
+            if model_ema.ema_has_module and not k.startswith('module.'):
+                new_state_dict[f'module.{k}'] = v
+            elif not model_ema.ema_has_module and k.startswith('module.'):
+                new_state_dict[k[len('module.'):]] = v
+            else:
+                new_state_dict[k] = v
+        model_ema.ema.load_state_dict(new_state_dict, strict=False)
+        return
+
     mem_file = io.BytesIO()
     torch.save(checkpoint, mem_file)
     mem_file.seek(0)

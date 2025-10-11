@@ -5,8 +5,8 @@ LSNet for Artist Style Classification and Clustering
 import torch
 import torch.nn as nn
 from .lsnet import LSNet, Conv2d_BN, BN_Linear
-from timm.models.registry import register_model
-from timm.models.helpers import build_model_with_cfg
+from timm.models import register_model
+from timm.models import build_model_with_cfg
 
 
 class LSNetArtist(LSNet):
@@ -32,7 +32,11 @@ class LSNetArtist(LSNet):
                  distillation=False,
                  feature_dim=None,  # 特征向量维度，默认为embed_dim[-1]
                  use_projection=True,  # 是否使用projection层
-                 ):
+                 **kwargs):
+        default_cfg = kwargs.pop('default_cfg', None)
+        pretrained_cfg = kwargs.pop('pretrained_cfg', None)
+        pretrained_cfg_overlay = kwargs.pop('pretrained_cfg_overlay', None)
+
         super().__init__(
             img_size=img_size,
             patch_size=patch_size,
@@ -42,7 +46,11 @@ class LSNetArtist(LSNet):
             key_dim=key_dim,
             depth=depth,
             num_heads=num_heads,
-            distillation=distillation
+            distillation=distillation,
+            default_cfg=default_cfg,
+            pretrained_cfg=pretrained_cfg,
+            pretrained_cfg_overlay=pretrained_cfg_overlay,
+            **kwargs
         )
         
         self.feature_dim = feature_dim if feature_dim is not None else embed_dim[-1]
@@ -143,11 +151,14 @@ default_cfgs_artist = dict(
 
 
 def _create_lsnet_artist(variant, pretrained=False, **kwargs):
+    cfg = default_cfgs_artist.get(variant, None)
+    if cfg is not None:
+        kwargs.setdefault('default_cfg', cfg)
+        kwargs.setdefault('pretrained_cfg', cfg)
     model = build_model_with_cfg(
         LSNetArtist,
         variant,
         pretrained,
-        default_cfg=default_cfgs_artist[variant],
         **kwargs,
     )
     return model

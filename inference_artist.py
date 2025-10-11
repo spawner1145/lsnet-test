@@ -18,6 +18,9 @@ from timm.data import resolve_data_config
 from timm.data.transforms_factory import create_transform
 from timm.models import create_model
 
+# Ensure custom LSNet artist models are registered with timm
+from model import lsnet_artist  # noqa: F401
+
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Artist Style Inference', add_help=False)
@@ -51,13 +54,15 @@ def get_args_parser():
                         help='Device to use')
     parser.add_argument('--batch-size', default=32, type=int,
                         help='Batch size for batch inference')
+    parser.add_argument('--allow-head-reinit', action='store_true', default=False,
+                        help='Allow re-initializing classification head when checkpoint classes mismatch')
     
     return parser
 
 
 def load_checkpoint_state(checkpoint_path: str):
     """加载 checkpoint 并返回模型权重"""
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     if isinstance(checkpoint, dict):
         if 'model' in checkpoint:
             return checkpoint['model']
@@ -66,10 +71,28 @@ def load_checkpoint_state(checkpoint_path: str):
     return checkpoint
 
 
+def normalize_state_dict_keys(state_dict):
+    """移除分布式训练前缀等冗余标记"""
+    normalized = {}
+    for key, value in state_dict.items():
+        if key.startswith('module.'):
+            new_key = key[len('module.'):]
+        else:
+            new_key = key
+        normalized[new_key] = value
+    return normalized
+
+
 def resolve_num_classes(num_classes_arg: Optional[int],
                         class_mapping: Optional[Dict[int, str]],
                         state_dict) -> int:
     """根据参数、CSV 或 checkpoint 推断类别数"""
+    checkpoint_head_classes = None
+    for key, value in state_dict.items():
+        if key.endswith('head.weight') or key.endswith('head.l.weight'):
+            checkpoint_head_classes = value.shape[0]
+            break
+
     if num_classes_arg is not None:
         if class_mapping and num_classes_arg != len(class_mapping):
             print(f"[Warning] 提供的 num_classes={num_classes_arg} 与 CSV 中的类别数 {len(class_mapping)} 不一致，已使用 CSV 的值。")
@@ -77,6 +100,8 @@ def resolve_num_classes(num_classes_arg: Optional[int],
         return num_classes_arg
 
     if class_mapping:
+        if checkpoint_head_classes is not None and checkpoint_head_classes != len(class_mapping):
+            print(f"[Warning] checkpoint 分类头输出 {checkpoint_head_classes} 类，但 CSV 列表包含 {len(class_mapping)} 类，将以 CSV 为准。")
         return len(class_mapping)
 
     # 尝试从权重中解析分类头大小
@@ -89,6 +114,8 @@ def resolve_num_classes(num_classes_arg: Optional[int],
 def load_model(args, state_dict):
     """加载模型"""
     print(f"Loading model: {args.model}")
+    state_dict = normalize_state_dict_keys(state_dict)
+
     model = create_model(
         args.model,
         pretrained=False,
@@ -96,7 +123,62 @@ def load_model(args, state_dict):
         feature_dim=args.feature_dim,
     )
 
-    model.load_state_dict(state_dict)
+    model_state = model.state_dict()
+    adapted_state = {}
+    mismatched = {}
+
+    for key, value in state_dict.items():
+        if key in model_state:
+            if model_state[key].shape != value.shape:
+                mismatched[key] = (model_state[key].shape, value.shape)
+                continue
+        adapted_state[key] = value
+
+    classifier_keys = [key for key in mismatched if 'head' in key or 'classifier' in key]
+    other_mismatched = {key: shapes for key, shapes in mismatched.items() if key not in classifier_keys}
+
+    if other_mismatched:
+        details = '\n'.join([
+            f"  - {key}: checkpoint {found} -> model {expected}"
+            for key, (expected, found) in other_mismatched.items()
+        ])
+        raise RuntimeError(
+            "以下权重尺寸与当前模型不兼容，且无法自动处理，请检查 checkpoint 或模型配置:\n" + details
+        )
+
+    require_strict_head = (args.mode in ['classify', 'both']) and not args.allow_head_reinit
+
+    if classifier_keys and require_strict_head:
+        details = '\n'.join([
+            f"  - {key}: checkpoint {mismatched[key][1]} -> model {mismatched[key][0]}"
+            for key in classifier_keys
+        ])
+        raise RuntimeError(
+            "分类模式下检测到 checkpoint 分类头与当前 num_classes 不一致，已终止加载以避免随机初始化结果。\n"
+            "请使用与训练数据一致的 checkpoint，或在确认需要重新初始化分类头时添加 --allow-head-reinit，"
+            "或者切换到 --mode cluster 仅提取特征。\n" + details
+        )
+
+    if classifier_keys:
+        print("[Warning] 分类头权重尺寸与当前 num_classes 不一致，将重新初始化以下权重：")
+        for key in classifier_keys:
+            expected, found = mismatched[key]
+            print(f"  - {key}: checkpoint {found} -> model {expected}")
+        # 冲突键已在上文过滤掉，无需额外处理
+
+    load_result = model.load_state_dict(adapted_state, strict=False)
+
+    if load_result.missing_keys:
+        print(f"[Info] Missing keys during load: {load_result.missing_keys}")
+    if load_result.unexpected_keys:
+        print(f"[Info] Unexpected keys ignored: {load_result.unexpected_keys}")
+
+    if classifier_keys and args.mode in ['classify', 'both']:
+        if args.allow_head_reinit:
+            print("[Warning] 分类模式在 --allow-head-reinit 下运行，分类头为随机初始化；为获得可靠结果请提供匹配的数据集 checkpoint。")
+        else:
+            print("[Info] 分类模式未开启或无需分类头，已忽略冲突的分类权重。")
+
     model.to(args.device)
     model.eval()
 
@@ -295,6 +377,7 @@ def main(args):
 
     # 加载 checkpoint 并解析类别数
     state_dict = load_checkpoint_state(args.checkpoint)
+    state_dict = normalize_state_dict_keys(state_dict)
     args.num_classes = resolve_num_classes(args.num_classes, class_mapping, state_dict)
 
     # 加载模型

@@ -2,11 +2,11 @@ import torch
 import itertools
 
 from timm.models.vision_transformer import trunc_normal_
-from timm.models.layers import SqueezeExcite
-from timm.models.registry import register_model
+from timm.layers import SqueezeExcite
+from timm.models import register_model
 from .ska import SKA
 
-from timm.models.helpers import build_model_with_cfg
+from timm.models import build_model_with_cfg
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 
 class Conv2d_BN(torch.nn.Sequential):
@@ -237,8 +237,23 @@ class LSNet(torch.nn.Module):
                  key_dim=[16, 16, 16, 16],
                  depth=[1, 2, 3, 4],
                  num_heads=[4, 4, 4, 4],
-                 distillation=False,):
+                 distillation=False,
+                 **kwargs):
         super().__init__()
+
+        default_cfg = kwargs.pop('default_cfg', None)
+        pretrained_cfg = kwargs.pop('pretrained_cfg', None)
+        pretrained_cfg_overlay = kwargs.pop('pretrained_cfg_overlay', None)
+
+        if default_cfg is not None:
+            self.default_cfg = default_cfg
+        if pretrained_cfg is not None:
+            self.pretrained_cfg = pretrained_cfg
+        if pretrained_cfg_overlay is not None:
+            self.pretrained_cfg_overlay = pretrained_cfg_overlay
+
+        if kwargs:
+            self.extra_init_kwargs = kwargs
 
         resolution = img_size
         self.patch_embed = torch.nn.Sequential(Conv2d_BN(in_chans, embed_dim[0] // 4, 3, 2, 1), torch.nn.ReLU(),
@@ -303,21 +318,31 @@ def _cfg(url='', **kwargs):
         **kwargs
     }
 
+def _with_hf_hub(kwargs):
+    """兼容不同 timm 版本的 hf hub 配置字段"""
+    if 'hf_hub' in kwargs and 'hf_hub_id' not in kwargs:
+        kwargs['hf_hub_id'] = kwargs.pop('hf_hub')
+    return kwargs
+
+
 default_cfgs = dict(
-    lsnet_t = _cfg(hf_hub='jameslahm/lsnet_t'),
-    lsnet_t_distill = _cfg(hf_hub='jameslahm/lsnet_t_distill'),
-    lsnet_s = _cfg(hf_hub='jameslahm/lsnet_s'),
-    lsnet_s_distill = _cfg(hf_hub='jameslahm/lsnet_s_distill'),
-    lsnet_b = _cfg(hf_hub='jameslahm/lsnet_b'),
-    lsnet_b_distill = _cfg(hf_hub='jameslahm/lsnet_b_distill'),
+    lsnet_t=_cfg(**_with_hf_hub({'hf_hub': 'jameslahm/lsnet_t'})),
+    lsnet_t_distill=_cfg(**_with_hf_hub({'hf_hub': 'jameslahm/lsnet_t_distill'})),
+    lsnet_s=_cfg(**_with_hf_hub({'hf_hub': 'jameslahm/lsnet_s'})),
+    lsnet_s_distill=_cfg(**_with_hf_hub({'hf_hub': 'jameslahm/lsnet_s_distill'})),
+    lsnet_b=_cfg(**_with_hf_hub({'hf_hub': 'jameslahm/lsnet_b'})),
+    lsnet_b_distill=_cfg(**_with_hf_hub({'hf_hub': 'jameslahm/lsnet_b_distill'})),
 )
 
 def _create_lsnet(variant, pretrained=False, **kwargs):
+    cfg = default_cfgs.get(variant, None)
+    if cfg is not None:
+        kwargs.setdefault('default_cfg', cfg)
+        kwargs.setdefault('pretrained_cfg', cfg)
     model = build_model_with_cfg(
         LSNet,
         variant,
         pretrained,
-        default_cfg=default_cfgs[variant],
         **kwargs,
     )
     return model

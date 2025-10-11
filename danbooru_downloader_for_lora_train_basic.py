@@ -5,6 +5,7 @@ import os
 import re
 from pathlib import Path
 from PIL import Image, UnidentifiedImageError
+import json
 from urllib.parse import quote
 
 # 需要保留下划线的特殊符号集合
@@ -82,6 +83,14 @@ async def download_image(session, item, filename, save_dir, error_flag, line_num
                     print(f"保留原始格式: {filename}")
                 
                 print(f"下载完成: {filename}")
+                
+                tag_string = item.get('tag_string', '')
+                processed_tags = tag_string.replace(' ', ',').replace('_', ' ')
+                txt_filename = filename.with_suffix('.txt')
+                async with aiofiles.open(txt_filename, 'w', encoding='utf-8') as txt_file:
+                    await txt_file.write(processed_tags)
+                print(f"写入TXT: {txt_filename}")
+                
                 return True
             else:
                 print(f"下载失败 (状态码 {response.status_code}): {url}")
@@ -263,14 +272,14 @@ async def main(txt_path, save_dir="downloaded_images", timeout=1000, proxies=Non
     return None
 
 if __name__ == "__main__":
-    txt_path = "artists.txt"  # 所有你需要爬的标签txt，每行一个tag
+    txt_path = "all_artists.txt"  # 所有你需要爬的标签txt，每行一个tag
     save_dir = "source_dir"      # 保存目录
     timeout = 5000           # 超时时间(毫秒)
     # 代理设置
     proxies = {"http://": 'http://127.0.0.1:7890', "https://": 'http://127.0.0.1:7890'}
     max_lines_per_batch = 5  # 每批处理的行数
     max_images = 50          # 一个tag最多爬的图片数
-    start_line = 1           # 开始处理的行号
+    start_line = 102           # 开始处理的行号
 
     while True:
         result = asyncio.run(main(
@@ -292,4 +301,3 @@ if __name__ == "__main__":
         if start_line > total_lines:
             print(f"\n已处理完所有 {total_lines} 个有效标签，退出脚本。")
             break
-    

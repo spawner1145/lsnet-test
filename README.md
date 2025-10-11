@@ -7,9 +7,9 @@
 - **数据准备**：`prepare_dataset.py` 自动将原始画师文件夹划分为 ImageFolder 结构，并生成 `class_mapping.csv` 等元信息。
 - **模型训练**：`train_artist_style.py` 支持多种 LSNet 画师模型，训练结束自动导出类别映射 CSV 及模型权重。
 - **推理部署**：`inference_artist.py` 在分类模式下依赖训练生成的 `class_mapping.csv` 进行标签映射，可选提取特征进行聚类或二者同时执行。
+- **多标签任务**：`train_artist_multilabel.py` 支持基于多标签 CSV 的训练与评估，`predict_artist_multilabel.py` 提供批量推理与置信度/比重导出。
 - **工具脚本**：`utils.py`、`losses.py`、`robust_utils.py` 等辅助训练；`flops.py`、`speed.py`、`eval.sh` 等用于性能测算与评测。
 
-> ✅ 代码审查结果：训练脚本自动导出 CSV，推理脚本已强制在分类场景加载该 CSV；聚类模式仅需模型权重即可。配合数据准备脚本即可完成整套流程，无额外依赖。
 
 ## 环境准备
 
@@ -87,17 +87,140 @@ python train_artist_style.py ^
   --output-dir D:\experiments\lsnet_t ^
   --batch-size 128 ^
   --epochs 300 ^
-  --num-workers 8
+  --num_workers 8
 ```
 
 常用参数说明：
 
-- `--model`：可选 `lsnet_t_artist`、`lsnet_s_artist`、`lsnet_b_artist`
-- `--amp`：启用混合精度训练
+- `--model`：可选 `lsnet_t_artist`、`lsnet_s_artist`、`lsnet_b_artist`，你可以在`model\lsnet_artist.py`里面自己改参数加预设
+- `--finetune`：在验证阶段将图像等比缩放至训练分辨率，适用于迁移学习微调
+- `--dist-eval`：在验证阶段启用分布式采样，便于多卡同步评估
 - `--resume`：断点续训
-- `--pretrained`：加载预训练权重作为初始化
+- `--finetune-from`：仅加载指定 checkpoint 的模型权重（会忽略优化器等训练状态），常用于迁移学习；若分类数不一致会自动重置分类头
+- `--teacher-model` / `--teacher-path`：配置蒸馏教师模型及权重
 
 训练结束后，`output-dir` 下的 `class_mapping.csv` 将作为后续分类推理的唯一标签映射文件。
+
+### 多卡训练（分布式启动）
+
+- `train_artist_style.py` 已集成 `torch.distributed`；`--batch-size` 指每张 GPU 的 batch，采样器会自动按世界大小拆分。
+- 推荐使用 **torchrun**（PyTorch≥1.10）启动。它会为每个进程设置 `RANK / LOCAL_RANK / WORLD_SIZE`，脚本会进入分布式模式。
+- 注意：PyTorch 的 NCCL 后端仅在 Linux/WSL 中支持 GPU 通信，原生 Windows 下若不使用 WSL 会报错；如必须在 Windows 原生环境实验，可把 `utils.init_distributed_mode` 中的 `args.dist_backend` 改为 `gloo`（仅 CPU 通信）。
+
+单机两卡示例（在 WSL 或 Linux Shell 下执行）：
+
+```bash
+torchrun --standalone --nnodes=1 --nproc_per_node=2 train_artist_style.py \
+  --model lsnet_t_artist \
+  --data-path /mnt/d/datasets/artist_dataset \
+  --output-dir /mnt/d/experiments/lsnet_t \
+  --batch-size 128 \
+  --epochs 400 \
+  --num_workers 8 \
+  --dist-eval
+```
+
+- 想限定可见 GPU，可在命令前加 `CUDA_VISIBLE_DEVICES=0,1`。
+- 断点续训继续多卡时添加 `--resume outputs_artist/checkpoint.pth`，总 batch 变化时请按比例调节 `--lr`。
+- 多机场景需要把 `torchrun` 换成带 `--nnodes`、`--node_rank`、`--master_addr`、`--master_port` 的多机参数，并保证各节点之间网络互通。
+
+## 多标签风格混合任务(未测试过，不要用)
+
+当一幅作品同时融合多位画师风格时，可以通过多标签训练/推理脚本获得更细粒度的置信度分析。
+
+### 数据标注格式(未测试过，不要用)
+
+新脚本使用 CSV 描述标签：
+
+```csv
+image_path,labels
+mix_samples/img_001.jpg,"artist_A,artist_B"
+mix_samples/img_002.jpg,"(re:zero:1.4),artist_C"
+```
+
+- `image_path` 相对于 `--data-path` 根目录或为绝对路径。
+- `labels` 默认使用逗号分隔，可通过 `--label-delimiter` 自定义；带权重的条目写成 `(label:weight)`，例如 `(re:zero:1.4)` 代表 `re:zero` 占据 1.4 的混合比重（训练时会按比例归一化）。
+- 训练集与验证集各自对应一份 CSV 文件，类别集合在训练集中自动汇总并复用到验证集。
+- 若已有“图片 + 同名 .txt”结构，可使用：
+
+  ```powershell
+  python tools/generate_multilabel_csv.py ^
+    --input-dir D:\datasets\artist_mix ^
+    --output-csv annotations/all_multilabel.csv ^
+    --recursive
+  ```
+
+  若希望一步生成训练/验证 CSV，并按标签出现次数过滤，可改用：
+
+  ```powershell
+  python tools/split_multilabel_dataset.py ^
+    --input-dir D:\datasets\artist_mix ^
+    --train-csv annotations/train_multilabel.csv ^
+    --val-csv annotations/val_multilabel.csv ^
+    --val-ratio 0.2 ^
+    --min-label-count 5 ^
+    --relative-paths ^
+    --recursive
+  ```
+
+  该脚本会：
+
+  - 按 `val-ratio` 随机划分 train / val；
+  - 丢弃在全局出现少于 `min-label-count` 次的标签；
+  - 输出符合训练脚本要求的逗号分隔 + 权重语法 CSV。
+
+### 多标签训练与评估(未测试过，不要用)
+
+```powershell
+python train_artist_multilabel.py ^
+  --data-path D:\datasets\artist_dataset ^
+  --train-ann annotations/train_multilabel.csv ^
+  --val-ann annotations/val_multilabel.csv ^
+  --model lsnet_t_artist ^
+  --output-dir D:\experiments\lsnet_t_multilabel ^
+  --batch-size 96 ^
+  --epochs 120 ^
+  --num_workers 8 ^
+  --threshold 0.4
+```
+
+脚本特点：
+
+- 自动计算每个标签的正负样本权重，对应 `BCEWithLogitsLoss(pos_weight=…)`，缓解长尾分布。
+- 训练、验证阶段统一输出 micro / macro mAP、F1、Precision/Recall 等多标签指标。
+- 继续支持 `--finetune-from`、`--resume`、`--dist-eval` 等常用参数。
+- 仍会在输出目录生成 `class_mapping.csv`（类别顺序）与 `label_stats.csv`（每个标签的样本数、全局占比与平均权重），便于复用与审计。
+
+若仅想查看指标，可直接运行：
+
+```powershell
+python train_artist_multilabel.py ^
+  --data-path D:\datasets\artist_dataset ^
+  --train-ann annotations/train_multilabel.csv ^
+  --val-ann annotations/val_multilabel.csv ^
+  --model lsnet_t_artist ^
+  --resume D:\experiments\lsnet_t_multilabel\best_checkpoint.pth ^
+  --eval
+```
+
+### 多标签推理与置信度比重(未测试过，不要用)
+
+```powershell
+python predict_artist_multilabel.py ^
+  --checkpoint D:\experiments\lsnet_t_multilabel\best_checkpoint.pth ^
+  --class-mapping D:\experiments\lsnet_t_multilabel\class_mapping.csv ^
+  --inputs D:\samples\hybrid ^
+  --output D:\results\hybrid_confidence.json ^
+  --top-k 6 ^
+  --threshold 0.05 ^
+  --normalize-ratio
+```
+
+- `--normalize-ratio` 会把每张图的 Sigmoid 置信度标准化为和为 1 的比重，方便评估风格占比；不启用时保留独立的置信度概率。
+- `--debug-full` 可在输出 JSON 中附带所有类别的原始置信度矩阵。
+- 如需递归扫描子目录，增加 `--recursive`。
+
+> 📌 **置信度如何理解？** 多标签模型输出的是每个画师标签的 Sigmoid 概率，代表“这张图是否含有该风格”的置信度；若想近似理解为风格占比，可在前述推理脚本中开启 `--normalize-ratio` 对概率向量做归一化，获得相对比重参考。
 
 ## 步骤三：推理与特征提取
 
@@ -116,7 +239,8 @@ python inference_artist.py ^
   --checkpoint D:\experiments\lsnet_t\model_best.pth ^
   --class-csv D:\experiments\lsnet_t\class_mapping.csv ^
   --input D:\samples\test.jpg ^
-  --output D:\results\single
+  --output D:\results\single ^
+  --class-csv artist_dataset\class_mapping.csv
 ```
 
 输出位于 `output\test_result.json`，内含 Top-K 预测类别及概率。
@@ -190,6 +314,7 @@ python tools/compare_vectors.py ^
 | --- | --- |
 | `timm` 导入失败 | 确认已执行 `pip install -r requirements.txt`，或手动安装 `pip install timm` |
 | 分类推理提示缺少 CSV | 分类或 `both` 模式必须提供 `--class-csv`，请使用训练输出目录中的同名文件 |
+| PyTorch 2.6 恢复训练报 `_pickle.UnpicklingError` | 代码已在训练脚本中允许 `argparse.Namespace` 反序列化；若使用自定义脚本，请在 `torch.load` 前调用 `torch.serialization.add_safe_globals([argparse.Namespace])`，或显式传入 `weights_only=False` |
 | 数据集划分脚本覆盖提示 | 若输出目录已存在，需要在提示后输入 `y` 允许覆盖 |
 | Windows 下符号链接失败 | 默认为复制模式；若想使用 `--symlink` 需以管理员方式运行或保持复制 |
 
@@ -198,10 +323,14 @@ python tools/compare_vectors.py ^
 ```
 lsnet/
 ├── train_artist_style.py      # 训练入口
+├── train_artist_multilabel.py  # 多标签训练入口
 ├── inference_artist.py        # 推理/特征提取脚本
+├── predict_artist_multilabel.py # 多标签推理脚本
+├── tools/split_multilabel_dataset.py # 自动划分train/val并过滤标签
+├── tools/generate_multilabel_csv.py # 由图片+txt生成多标签CSV
 ├── prepare_dataset.py         # 数据集划分与 CSV 生成
 ├── model/                     # 模型定义
-├── data/                      # 数据增强与数据集实现
+├── data/                      # 数据增强与数据集实现（含 MultiLabelImageDataset）
 ├── utils.py / losses.py       # 训练工具
 ├── requirements.txt           # 依赖列表
 └── ...                        # 其他性能测试与评估脚本

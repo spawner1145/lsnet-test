@@ -11,7 +11,18 @@ import torch.backends.cudnn as cudnn
 import csv
 import json
 import os
+import logging
 from pathlib import Path
+
+#python train_artist_style.py --model lsnet_t_artist --data-path artist_dataset --output-dir outputs_artist --batch-size 128 --epochs 400 --num_workers 8
+#python train_artist_style.py --model lsnet_t_artist --data-path artist_dataset --output-dir outputs_artist --batch-size 128 --epochs 400 --num_workers 8 --resume outputs_artist\checkpoint.pth
+
+# PyTorch 2.6+ 在默认 weights_only=True 的情况下，需要显式允许部分对象反序列化
+try:
+    if hasattr(torch.serialization, 'add_safe_globals'):
+        torch.serialization.add_safe_globals([argparse.Namespace])
+except Exception:
+    pass
 
 from timm.data import Mixup
 from timm.models import create_model
@@ -28,6 +39,34 @@ from losses import DistillationLoss
 
 from model import lsnet_artist
 import utils
+
+
+def _patch_logging_clear_cache():
+    """Work around Python logging bug where PlaceHolder lacks _cache."""
+    manager_cls = logging.Manager
+    if getattr(manager_cls._clear_cache, '_lsnet_patched', False):
+        return
+
+    from logging import _acquireLock, _releaseLock  # type: ignore
+
+    def _safe_clear_cache(self):
+        _acquireLock()
+        try:
+            for logger in self.loggerDict.values():
+                cache = getattr(logger, '_cache', None)
+                if cache is not None:
+                    cache.clear()
+            root_cache = getattr(self.root, '_cache', None)
+            if root_cache is not None:
+                root_cache.clear()
+        finally:
+            _releaseLock()
+
+    _safe_clear_cache._lsnet_patched = True  # type: ignore[attr-defined]
+    manager_cls._clear_cache = _safe_clear_cache
+
+
+_patch_logging_clear_cache()
 
 
 def _extract_class_to_idx(dataset):
@@ -60,6 +99,53 @@ def _export_class_mapping_csv(class_to_idx, output_dir: Path) -> Path:
     return csv_path
 
 
+def _load_finetune_weights(model, finetune_path, args):
+    print(f"Finetuning from checkpoint: {finetune_path}")
+    if finetune_path.startswith('https'):
+        checkpoint = torch.hub.load_state_dict_from_url(
+            finetune_path, map_location='cpu', check_hash=True)
+    else:
+        checkpoint = torch.load(finetune_path, map_location='cpu', weights_only=False)
+
+    if isinstance(checkpoint, dict):
+        if 'model' in checkpoint:
+            state_dict = checkpoint['model']
+        elif 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+        else:
+            state_dict = checkpoint
+    else:
+        state_dict = checkpoint
+
+    cleaned_state_dict = {}
+    for k, v in state_dict.items():
+        new_key = k[7:] if k.startswith('module.') else k
+        cleaned_state_dict[new_key] = v
+
+    # 如果分类头维度不一致，移除相关参数
+    head_weight_keys = [
+        'head.l.weight',
+        'head.linear.weight',
+        'head.weight'
+    ]
+    reset_head = False
+    for key in head_weight_keys:
+        if key in cleaned_state_dict and cleaned_state_dict[key].shape[0] != args.nb_classes:
+            reset_head = True
+            break
+    if reset_head:
+        keys_to_remove = [k for k in cleaned_state_dict.keys() if k.startswith('head.') or k.startswith('head_dist.')]
+        for key in keys_to_remove:
+            cleaned_state_dict.pop(key, None)
+        print('Removed classification head parameters due to class mismatch; they will be randomly re-initialized.')
+
+    msg = model.load_state_dict(cleaned_state_dict, strict=False)
+    if msg.missing_keys:
+        print(f'Finetune load missing keys: {msg.missing_keys}')
+    if msg.unexpected_keys:
+        print(f'Finetune load unexpected keys: {msg.unexpected_keys}')
+
+
 def get_args_parser():
     parser = argparse.ArgumentParser('LSNet Artist Style Training', add_help=False)
     
@@ -77,6 +163,8 @@ def get_args_parser():
                         help='Input image size')
     parser.add_argument('--feature-dim', default=None, type=int,
                         help='Feature dimension for clustering (default: use model default)')
+    parser.add_argument('--finetune', action='store_true', default=False,
+                        help='Resize validation images to fine-tune resolution')
     parser.add_argument('--use-projection', action='store_true', default=True,
                         help='Use projection layer for feature extraction')
     parser.add_argument('--no-projection', dest='use_projection', action='store_false',
@@ -164,6 +252,8 @@ def get_args_parser():
                         help='Dataset type (use IMNET for ImageFolder format)')
     parser.add_argument('--num-classes', default=100, type=int,
                         help='Number of artist classes')
+    parser.add_argument('--inat-category', default='name', type=str,
+                        help='Label category to use for INat datasets')
     parser.add_argument('--output-dir', default='./output/artist_style',
                         help='Path to save outputs')
     parser.add_argument('--device', default='cuda',
@@ -172,6 +262,8 @@ def get_args_parser():
                         help='Random seed')
     parser.add_argument('--resume', default='', 
                         help='Resume from checkpoint')
+    parser.add_argument('--finetune-from', default='',
+                        help='Load pretrained weights for finetuning (model weights only)')
     parser.add_argument('--start_epoch', default=0, type=int,
                         help='Start epoch')
     parser.add_argument('--eval', action='store_true',
@@ -187,6 +279,10 @@ def get_args_parser():
                         help='Number of distributed processes')
     parser.add_argument('--dist_url', default='env://',
                         help='URL used to set up distributed training')
+    parser.add_argument('--dist-eval', dest='dist_eval', action='store_true', default=False,
+                        help='Enable distributed evaluation (uses DistributedSampler for validation set)')
+    parser.add_argument('--no-dist-eval', dest='dist_eval', action='store_false',
+                        help='Disable distributed evaluation')
     
     # 蒸馏参数
     parser.add_argument('--teacher-model', default=None, type=str,
@@ -294,6 +390,12 @@ def main(args):
     )
     
     model.to(device)
+
+    if args.finetune_from:
+        if args.resume:
+            raise ValueError('--finetune-from cannot be combined with --resume. Please choose one.')
+        _load_finetune_weights(model, args.finetune_from, args)
+        args.start_epoch = 0
     
     model_ema = None
     if args.model_ema:
@@ -347,11 +449,10 @@ def main(args):
         teacher_model.to(device)
         teacher_model.eval()
     
-    # 包装蒸馏损失
-    if args.distillation_type != 'none':
-        criterion = DistillationLoss(
-            criterion, teacher_model, args.distillation_type, args.distillation_alpha, args.distillation_tau
-        )
+    # 包装蒸馏损失（当类型为 none 时等价于原始损失）
+    criterion = DistillationLoss(
+        criterion, teacher_model, args.distillation_type, args.distillation_alpha, args.distillation_tau
+    )
     
     # output_dir 已确保在上方创建
     
@@ -404,7 +505,7 @@ def main(args):
                     'optimizer': optimizer.state_dict(),
                     'lr_scheduler': lr_scheduler.state_dict(),
                     'epoch': epoch,
-                    'model_ema': get_state_dict(model_ema),
+                    'model_ema': get_state_dict(model_ema) if model_ema is not None else None,
                     'scaler': loss_scaler.state_dict(),
                     'args': args,
                 }, checkpoint_path)
@@ -422,7 +523,7 @@ def main(args):
                     'optimizer': optimizer.state_dict(),
                     'lr_scheduler': lr_scheduler.state_dict(),
                     'epoch': epoch,
-                    'model_ema': get_state_dict(model_ema),
+                    'model_ema': get_state_dict(model_ema) if model_ema is not None else None,
                     'scaler': loss_scaler.state_dict(),
                     'args': args,
                 }, checkpoint_path)
@@ -444,6 +545,8 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('LSNet Artist Style Training', parents=[get_args_parser()])
     args = parser.parse_args()
+    if not hasattr(args, 'finetune'):
+        setattr(args, 'finetune', False)
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     main(args)

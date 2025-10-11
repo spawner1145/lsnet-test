@@ -73,10 +73,14 @@ def build_dataset(is_train, args):
         data_dir = os.path.join(args.data_path, f'{prefix}.tar')
         if os.path.exists(data_dir):
             dataset = TimmDatasetTar(data_dir, transform=transform)
+            nb_classes = 1000
         else:
             root = os.path.join(args.data_path, 'train' if is_train else 'val')
             dataset = datasets.ImageFolder(root, transform=transform)
-        nb_classes = 1000
+            if hasattr(dataset, 'classes'):
+                nb_classes = len(dataset.classes)
+            else:
+                nb_classes = 1000
     elif args.data_set == 'IMNETEE':
         root = os.path.join(args.data_path, 'train' if is_train else 'val')
         dataset = datasets.ImageFolder(root, transform=transform)
