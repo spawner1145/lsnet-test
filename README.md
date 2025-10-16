@@ -112,7 +112,7 @@ python train_artist_style.py ^
   - `lsnet_b_artist`: Base模型，参数量约23.2M，更好的性能
   - `lsnet_l_artist`: Large模型，参数量约50M+，适合大规模训练和更高精度需求
   - `lsnet_xl_artist`: Extra Large模型，参数量约100M+，专门用于处理100万+图片、10万+类别的大数据集
-- `--finetune`：在验证阶段将图像等比缩放至训练分辨率，适用于迁移学习微调
+- `--finetune`：在验证阶段将图像直接缩放至训练分辨率（而非标准256→center crop），适用于需要精确分辨率匹配的迁移学习微调
 - `--dist-eval`：在验证阶段启用分布式采样，便于多卡同步评估
 - `--resume`：断点续训
 - `--finetune-from`：仅加载指定 checkpoint 的模型权重（会忽略优化器等训练状态），常用于迁移学习；若分类数不一致会自动重置分类头
