@@ -40,6 +40,7 @@ from losses import DistillationLoss
 
 from model import lsnet_artist
 import utils
+import model
 
 
 def _patch_logging_clear_cache():
@@ -322,6 +323,10 @@ def get_args_parser():
                         help='Start epoch')
     parser.add_argument('--eval', action='store_true',
                         help='Perform evaluation only')
+    parser.add_argument('--save-every', default=None, type=int,
+                        help='Save checkpoint every N epochs (in addition to best and latest)')
+    parser.add_argument('--eval-every', default=1, type=int,
+                        help='Evaluate on validation set every N epochs (default: 1)')
     parser.add_argument('--num_workers', default=16, type=int,  # 更多workers
                         help='Number of data loading workers')
     parser.add_argument('--pin-mem', action='store_true', default=True,
@@ -573,23 +578,41 @@ def main(args):
                     'args': args,
                 }, checkpoint_path)
         
-        test_stats = evaluate(data_loader_val, model, device)
-        print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
-        max_accuracy = max(max_accuracy, test_stats["acc1"])
-        print(f'Max accuracy: {max_accuracy:.2f}%')
+        if args.save_every and args.output_dir and (epoch + 1) % args.save_every == 0:
+            checkpoint_path = output_dir / f'checkpoint_epoch_{epoch + 1}.pth'
+            utils.save_on_master({
+                'model': model_without_ddp.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'lr_scheduler': lr_scheduler.state_dict(),
+                'epoch': epoch,
+                'model_ema': get_state_dict(model_ema) if model_ema is not None else None,
+                'scaler': loss_scaler.state_dict(),
+                'args': args,
+            }, checkpoint_path)
+            print(f'Saved checkpoint at epoch {epoch + 1}')
         
-        if args.output_dir and test_stats["acc1"] >= max_accuracy:
-            checkpoint_paths = [output_dir / 'best_checkpoint.pth']
-            for checkpoint_path in checkpoint_paths:
-                utils.save_on_master({
-                    'model': model_without_ddp.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'lr_scheduler': lr_scheduler.state_dict(),
-                    'epoch': epoch,
-                    'model_ema': get_state_dict(model_ema) if model_ema is not None else None,
-                    'scaler': loss_scaler.state_dict(),
-                    'args': args,
-                }, checkpoint_path)
+        should_eval = (epoch + 1) % args.eval_every == 0 or epoch == args.epochs - 1
+        
+        if should_eval:
+            test_stats = evaluate(data_loader_val, model, device)
+            print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
+            max_accuracy = max(max_accuracy, test_stats["acc1"])
+            print(f'Max accuracy: {max_accuracy:.2f}%')
+            
+            if args.output_dir and test_stats["acc1"] >= max_accuracy:
+                checkpoint_paths = [output_dir / 'best_checkpoint.pth']
+                for checkpoint_path in checkpoint_paths:
+                    utils.save_on_master({
+                        'model': model_without_ddp.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'lr_scheduler': lr_scheduler.state_dict(),
+                        'epoch': epoch,
+                        'model_ema': get_state_dict(model_ema) if model_ema is not None else None,
+                        'scaler': loss_scaler.state_dict(),
+                        'args': args,
+                    }, checkpoint_path)
+        else:
+            test_stats = {'acc1': 0.0}  # 占位符，用于日志记录
         
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      **{f'test_{k}': v for k, v in test_stats.items()},

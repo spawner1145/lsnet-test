@@ -90,6 +90,20 @@ python train_artist_style.py ^
   --num_workers 8
 ```
 
+**定期保存和验证示例**（减少验证频率以加速训练）：
+
+```powershell
+python train_artist_style.py ^
+  --model lsnet_b_artist ^
+  --data-path D:\datasets\artist_dataset ^
+  --output-dir D:\experiments\lsnet_b ^
+  --batch-size 64 ^
+  --epochs 500 ^
+  --save-every 50 ^
+  --eval-every 10 ^
+  --num_workers 8
+```
+
 常用参数说明：
 
 - `--model`：可选 `lsnet_t_artist`、`lsnet_s_artist`、`lsnet_b_artist`、`lsnet_l_artist`，你可以在`model\lsnet_artist.py`里面自己改参数加预设
@@ -103,6 +117,8 @@ python train_artist_style.py ^
 - `--resume`：断点续训
 - `--finetune-from`：仅加载指定 checkpoint 的模型权重（会忽略优化器等训练状态），常用于迁移学习；若分类数不一致会自动重置分类头
 - `--teacher-model` / `--teacher-path`：配置蒸馏教师模型及权重
+- `--save-every N`：每隔 N 个 epoch 保存一个 checkpoint（除了始终保存的最新和最佳 checkpoint）
+- `--eval-every N`：每隔 N 个 epoch 在验证集上进行一次评估（默认值为 1，即每轮都验证）
 
 训练结束后，`output-dir` 下的 `class_mapping.csv` 将作为后续分类推理的唯一标签映射文件。
 
