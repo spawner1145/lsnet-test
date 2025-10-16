@@ -90,20 +90,6 @@ python train_artist_style.py ^
   --num_workers 8
 ```
 
-**定期保存和验证示例**（减少验证频率以加速训练）：
-
-```powershell
-python train_artist_style.py ^
-  --model lsnet_b_artist ^
-  --data-path D:\datasets\artist_dataset ^
-  --output-dir D:\experiments\lsnet_b ^
-  --batch-size 64 ^
-  --epochs 500 ^
-  --save-every 50 ^
-  --eval-every 10 ^
-  --num_workers 8
-```
-
 常用参数说明：
 
 - `--model`：可选 `lsnet_t_artist`、`lsnet_s_artist`、`lsnet_b_artist`、`lsnet_l_artist`，你可以在`model\lsnet_artist.py`里面自己改参数加预设
@@ -112,69 +98,36 @@ python train_artist_style.py ^
   - `lsnet_b_artist`: Base模型，参数量约23.2M，更好的性能
   - `lsnet_l_artist`: Large模型，参数量约50M+，适合大规模训练和更高精度需求
   - `lsnet_xl_artist`: Extra Large模型，参数量约100M+，专门用于处理100万+图片、10万+类别的大数据集
-- `--finetune`：在验证阶段将图像直接缩放至训练分辨率（而非标准256→center crop），适用于需要精确分辨率匹配的迁移学习微调
+- `--eval-every`：每隔多少个epoch进行一次评估（默认：1，每epoch都评估）
+- `--save-every`：每隔多少个epoch保存一次checkpoint（默认：None，仅保存最终和最佳checkpoint）
+- `--finetune`：在验证阶段将图像等比缩放至训练分辨率，适用于迁移学习微调
 - `--dist-eval`：在验证阶段启用分布式采样，便于多卡同步评估
 - `--resume`：断点续训
 - `--finetune-from`：仅加载指定 checkpoint 的模型权重（会忽略优化器等训练状态），常用于迁移学习；若分类数不一致会自动重置分类头
 - `--teacher-model` / `--teacher-path`：配置蒸馏教师模型及权重
-- `--save-every N`：每隔 N 个 epoch 保存一个 checkpoint（除了始终保存的最新和最佳 checkpoint）
-- `--eval-every N`：每隔 N 个 epoch 在验证集上进行一次评估（默认值为 1，即每轮都验证）
 
 训练结束后，`output-dir` 下的 `class_mapping.csv` 将作为后续分类推理的唯一标签映射文件。
-
-> 📌 **类别一致性验证**：如果输出目录中已存在 `class_mapping.csv`，训练脚本会自动验证数据集类别是否与CSV一致，并输出警告信息确保数据完整性。
-
-### 数据集鲁棒性
-
-训练脚本已集成损坏图片处理机制：
-
-- **预过滤损坏图片**：在数据集初始化时自动检测并过滤掉无法读取的图片
-- **警告日志**：所有被过滤的图片都会在控制台输出详细警告信息
-- **数据集完整性**：确保训练过程中所有图片都是有效的，不会中断训练流程
-
-这确保了训练过程对数据集质量问题的容错性，适合处理包含少量损坏图片的真实数据集。
 
 ### 多卡训练（分布式启动）
 
 - `train_artist_style.py` 已集成 `torch.distributed`；`--batch-size` 指每张 GPU 的 batch，采样器会自动按世界大小拆分。
 - 推荐使用 **torchrun**（PyTorch≥1.10）启动。它会为每个进程设置 `RANK / LOCAL_RANK / WORLD_SIZE`，脚本会进入分布式模式。
-- **Windows 多卡设置**：
-  - 使用 `gloo` 后端（已自动配置）
-  - 单机多卡示例：
-    ```batch
-    # 创建启动脚本 run_multigpu.bat
-    @echo off
-    set CUDA_VISIBLE_DEVICES=0,1
-    set MASTER_ADDR=127.0.0.1
-    set MASTER_PORT=12345
-    
-    start "GPU0" torchrun --standalone --nnodes=1 --nproc_per_node=2 ^
-      train_artist_style.py --model lsnet_t_artist --data-path your_data ^
-      --batch-size 32 --epochs 300 --output-dir output_dir
-    
-    # 或者使用环境变量方式
-    set RANK=0
-    set WORLD_SIZE=2
-    set LOCAL_RANK=0
-    python train_artist_style.py [args...]
-    ```
-- **Linux 多卡设置**：
-  - 使用 `nccl` 后端（已自动配置）
-  - 单机多卡示例：
-    ```bash
-    # 使用torchrun启动（推荐）
-    torchrun --standalone --nnodes=1 --nproc_per_node=2 \
-      train_artist_style.py --model lsnet_t_artist --data-path your_data \
-      --batch-size 32 --epochs 300 --output-dir output_dir
-    
-    # 或者使用CUDA_VISIBLE_DEVICES
-    CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nnodes=1 --nproc_per_node=2 \
-      train_artist_style.py --model lsnet_t_artist --data-path your_data \
-      --batch-size 32 --epochs 300 --output-dir output_dir
-    
-    # 或者使用提供的脚本
-    bash run_multigpu_linux.sh
-    ```
+- 注意：PyTorch 的 NCCL 后端仅在 Linux/WSL 中支持 GPU 通信，原生 Windows 下若不使用 WSL 会报错；如必须在 Windows 原生环境实验，可把 `utils.init_distributed_mode` 中的 `args.dist_backend` 改为 `gloo`（仅 CPU 通信）。
+
+单机两卡示例（在 WSL 或 Linux Shell 下执行）：
+
+```bash
+torchrun --standalone --nnodes=1 --nproc_per_node=2 train_artist_style.py \
+  --model lsnet_t_artist \
+  --data-path /mnt/d/datasets/artist_dataset \
+  --output-dir /mnt/d/experiments/lsnet_t \
+  --batch-size 128 \
+  --epochs 400 \
+  --num_workers 8 \
+  --dist-eval
+```
+
+- 想限定可见 GPU，可在命令前加 `CUDA_VISIBLE_DEVICES=0,1`。
 - 断点续训继续多卡时添加 `--resume outputs_artist/checkpoint.pth`，总 batch 变化时请按比例调节 `--lr`。
 - 多机场景需要把 `torchrun` 换成带 `--nnodes`、`--node_rank`、`--master_addr`、`--master_port` 的多机参数，并保证各节点之间网络互通。
 
@@ -284,8 +237,6 @@ python predict_artist_multilabel.py ^
 - `cluster`：仅提取特征向量（无需 CSV）
 - `both`：同时输出分类结果与特征
 
-> 📌 **自动参数检测**：脚本会自动从 `class_mapping.csv` 读取类别数，从 checkpoint 检测特征维度，无需手动指定 `--num-classes` 或 `--feature-dim`。
-
 ### 单张图像分类
 
 ```powershell
@@ -295,7 +246,27 @@ python inference_artist.py ^
   --checkpoint D:\experiments\lsnet_t\model_best.pth ^
   --class-csv D:\experiments\lsnet_t\class_mapping.csv ^
   --input D:\samples\test.jpg ^
-  --output D:\results\single
+  --output D:\results\single ^
+  --class-csv artist_dataset\class_mapping.csv
+```
+
+**推理参数说明：**
+
+- `--top-k`：显示的预测结果数量（默认：5）
+- `--threshold`：概率阈值过滤，只显示概率≥此值的预测结果（默认：0.0，仅单图推理支持）
+
+**示例：显示Top-3结果，过滤低置信度预测**
+
+```powershell
+python inference_artist.py ^
+  --mode classify ^
+  --model lsnet_t_artist ^
+  --checkpoint D:\experiments\lsnet_t\model_best.pth ^
+  --class-csv D:\experiments\lsnet_t\class_mapping.csv ^
+  --input D:\samples\test.jpg ^
+  --output D:\results\single ^
+  --top-k 3 ^
+  --threshold 0.2
 ```
 
 输出位于 `output\test_result.json`，内含 Top-K 预测类别及概率。
@@ -310,12 +281,13 @@ python inference_artist.py ^
   --class-csv D:\experiments\lsnet_t\class_mapping.csv ^
   --input D:\samples\batch ^
   --output D:\results\batch ^
-  --batch-size 64
+  --batch-size 64 ^
+  --top-k 3
 ```
 
 当输入为目录时：
 
-- `batch_results.json`：逐图像的分类结果与特征向量
+- `batch_results.json`：逐图像的分类结果与特征向量（支持top-k参数）
 - `features.npy`：堆叠后的特征矩阵，可用于聚类或相似检索
 - `image_names.txt`：特征矩阵的文件名顺序
 

@@ -61,52 +61,6 @@ class INatDataset(ImageFolder):
     # __getitem__ and __len__ inherited from ImageFolder
 
 
-class RobustImageFolder(ImageFolder):
-    """
-    ImageFolder with error handling for corrupted images.
-    Filters out corrupted images during initialization with warnings.
-    """
-
-    def __init__(self, root, transform=None, target_transform=None,
-                 loader=default_loader, is_valid_file=None):
-        # First, try to build the dataset normally
-        super().__init__(root, transform, target_transform, loader, is_valid_file)
-
-        # Get total count before filtering
-        total_samples = len(self.samples)
-
-        # Filter out corrupted images
-        filtered_samples = []
-        for path, target in self.samples:
-            try:
-                # Try to load the image to check if it's valid
-                sample = self.loader(path)
-                if sample is not None:
-                    filtered_samples.append((path, target))
-                else:
-                    print(f"WARNING: Skipping empty/invalid image: {path}")
-            except Exception as e:
-                print(f"WARNING: Skipping corrupted image {path}: {e}")
-
-        # Update samples with filtered list
-        self.samples = filtered_samples
-        print(f"Dataset loaded: {len(self.samples)} valid images out of {total_samples} total images")
-
-    def __getitem__(self, index):
-        """
-        Standard __getitem__ implementation - all images should be valid now.
-        """
-        path, target = self.samples[index]
-        sample = self.loader(path)
-
-        if self.transform is not None:
-            sample = self.transform(sample)
-        if self.target_transform is not None:
-            target = self.target_transform(target)
-
-        return sample, target
-
-
 def build_dataset(is_train, args):
     transform = build_transform(is_train, args)
 
@@ -122,7 +76,7 @@ def build_dataset(is_train, args):
             nb_classes = 1000
         else:
             root = os.path.join(args.data_path, 'train' if is_train else 'val')
-            dataset = RobustImageFolder(root, transform=transform)
+            dataset = datasets.ImageFolder(root, transform=transform)
             if hasattr(dataset, 'classes'):
                 nb_classes = len(dataset.classes)
             else:
@@ -133,7 +87,7 @@ def build_dataset(is_train, args):
         nb_classes = 10
     elif args.data_set == 'FLOWERS':
         root = os.path.join(args.data_path, 'train' if is_train else 'test')
-        dataset = RobustImageFolder(root, transform=transform)
+        dataset = datasets.ImageFolder(root, transform=transform)
         if is_train:
             dataset = torch.utils.data.ConcatDataset(
                 [dataset for _ in range(100)])

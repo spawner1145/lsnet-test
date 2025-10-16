@@ -36,52 +36,64 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
     # Gradient accumulation variables
     accumulation_counter = 0
     accumulated_loss = 0.0
+    skipped_samples = 0
 
     for samples, targets in metric_logger.log_every(
             data_loader, print_freq, header):
-        samples = samples.to(device, non_blocking=True)
-        targets = targets.to(device, non_blocking=True)
+        try:
+            samples = samples.to(device, non_blocking=True)
+            targets = targets.to(device, non_blocking=True)
 
-        if mixup_fn is not None:
-            samples, targets = mixup_fn(samples, targets)
+            if mixup_fn is not None:
+                samples, targets = mixup_fn(samples, targets)
 
-        with torch.amp.autocast(enabled=False, device_type="cuda"):
-            outputs = model(samples)
-            loss = criterion(samples, outputs, targets)
+            with torch.amp.autocast(enabled=False, device_type="cuda"):
+                outputs = model(samples)
+                loss = criterion(samples, outputs, targets)
 
-        loss_value = loss.item()
-        accumulated_loss += loss_value
+            loss_value = loss.item()
+            accumulated_loss += loss_value
 
-        # Scale loss for gradient accumulation
-        loss = loss / accumulation_steps
+            # Scale loss for gradient accumulation
+            loss = loss / accumulation_steps
 
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-            sys.exit(1)
+            if not math.isfinite(loss_value):
+                print("Loss is {}, stopping training".format(loss_value))
+                sys.exit(1)
 
-        # this attribute is added by timm on one optimizer (adahessian)
-        is_second_order = hasattr(
-            optimizer, 'is_second_order') and optimizer.is_second_order
-        loss_scaler(loss, optimizer, clip_grad=clip_grad, clip_mode=clip_mode,
-                    parameters=model.parameters(), create_graph=is_second_order,
-                    need_update=(accumulation_counter + 1) % accumulation_steps == 0)
+            # this attribute is added by timm on one optimizer (adahessian)
+            is_second_order = hasattr(
+                optimizer, 'is_second_order') and optimizer.is_second_order
+            loss_scaler(loss, optimizer, clip_grad=clip_grad, clip_mode=clip_mode,
+                        parameters=model.parameters(), create_graph=is_second_order,
+                        need_update=(accumulation_counter + 1) % accumulation_steps == 0)
 
-        accumulation_counter += 1
+            accumulation_counter += 1
 
-        # Update metrics for every step (not just accumulation steps)
-        # This ensures proper logging even during accumulation
-        current_loss = accumulated_loss / accumulation_counter if accumulation_counter > 0 else loss_value
-        metric_logger.update(loss=current_loss)
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+            # Update metrics for every step (not just accumulation steps)
+            # This ensures proper logging even during accumulation
+            current_loss = accumulated_loss / accumulation_counter if accumulation_counter > 0 else loss_value
+            metric_logger.update(loss=current_loss)
+            metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
-        # Perform optimizer step and reset gradients after accumulation_steps
-        if accumulation_counter % accumulation_steps == 0:
-            torch.cuda.synchronize()
-            if model_ema is not None:
-                model_ema.update(model)
+            # Perform optimizer step and reset gradients after accumulation_steps
+            if accumulation_counter % accumulation_steps == 0:
+                torch.cuda.synchronize()
+                if model_ema is not None:
+                    model_ema.update(model)
 
-            # Reset accumulation variables
-            accumulated_loss = 0.0
+                # Reset accumulation variables
+                accumulated_loss = 0.0
+
+        except Exception as e:
+            # Skip problematic samples and log warning
+            skipped_samples += 1
+            print(f"[Warning] Skipping problematic sample in epoch {epoch}: {str(e)}")
+            continue
+
+    # Log total skipped samples for this epoch
+    if skipped_samples > 0:
+        print(f"[Warning] Skipped {skipped_samples} problematic samples in epoch {epoch}")
 
     # Handle remaining accumulated gradients if any
     if accumulation_counter % accumulation_steps != 0:
@@ -103,25 +115,37 @@ def evaluate(data_loader, model, device):
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Test:'
+    skipped_samples = 0
 
     # switch to evaluation mode
     model.eval()
 
     for images, target in metric_logger.log_every(data_loader, 10, header):
-        images = images.to(device, non_blocking=True)
-        target = target.to(device, non_blocking=True)
+        try:
+            images = images.to(device, non_blocking=True)
+            target = target.to(device, non_blocking=True)
 
-        # compute output
-        with torch.amp.autocast(enabled=False, device_type="cuda"):
-            output = model(images)
-            loss = criterion(output, target)
+            # compute output
+            with torch.amp.autocast(enabled=False, device_type="cuda"):
+                output = model(images)
+                loss = criterion(output, target)
 
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
 
-        batch_size = images.shape[0]
-        metric_logger.update(loss=loss.item())
-        metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
-        metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
+            batch_size = images.shape[0]
+            metric_logger.update(loss=loss.item())
+            metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
+            metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
+        except Exception as e:
+            # Skip problematic samples and log warning
+            skipped_samples += 1
+            print(f"[Warning] Skipping problematic sample during evaluation: {str(e)}")
+            continue
+
+    # Log total skipped samples for evaluation
+    if skipped_samples > 0:
+        print(f"[Warning] Skipped {skipped_samples} problematic samples during evaluation")
+
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print('* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}'

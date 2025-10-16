@@ -13,7 +13,6 @@ import json
 import os
 import logging
 from pathlib import Path
-from typing import Optional, Dict
 
 #python train_artist_style.py --model lsnet_t_artist --data-path artist_dataset --output-dir outputs_artist --batch-size 128 --epochs 400 --num_workers 8
 #python train_artist_style.py --model lsnet_t_artist --data-path artist_dataset --output-dir outputs_artist --batch-size 128 --epochs 400 --num_workers 8 --resume outputs_artist\checkpoint.pth
@@ -40,7 +39,6 @@ from losses import DistillationLoss
 
 from model import lsnet_artist
 import utils
-import model
 
 
 def _patch_logging_clear_cache():
@@ -99,57 +97,6 @@ def _export_class_mapping_csv(class_to_idx, output_dir: Path) -> Path:
         for class_name, class_id in sorted(class_to_idx.items(), key=lambda kv: kv[1]):
             writer.writerow([class_id, class_name])
     return csv_path
-
-
-def _load_existing_class_mapping_csv(output_dir: Path) -> Optional[Dict[int, str]]:
-    """Load existing class mapping CSV if it exists."""
-    csv_path = output_dir / 'class_mapping.csv'
-    if not csv_path.exists():
-        return None
-    
-    mapping = {}
-    try:
-        with csv_path.open('r', encoding='utf-8-sig') as f:
-            reader = csv.DictReader(f)
-            if not reader.fieldnames or 'class_id' not in reader.fieldnames or 'class_name' not in reader.fieldnames:
-                print(f"[Warning] Invalid CSV format in {csv_path}, ignoring existing file")
-                return None
-            
-            for row in reader:
-                class_id = int(row['class_id'])
-                class_name = row['class_name']
-                mapping[class_id] = class_name
-    except Exception as e:
-        print(f"[Warning] Failed to load existing class mapping CSV: {e}")
-        return None
-    
-    return mapping
-
-
-def _validate_class_mapping_consistency(dataset_classes: Dict[str, int], 
-                                       existing_mapping: Dict[int, str]) -> bool:
-    """Validate that dataset classes are consistent with existing CSV mapping."""
-    if not existing_mapping:
-        return True
-    
-    # Convert dataset classes (name->id) to id->name for comparison
-    dataset_mapping = {class_id: class_name for class_name, class_id in dataset_classes.items()}
-    
-    # Check if mappings are consistent
-    if len(dataset_mapping) != len(existing_mapping):
-        print(f"[Warning] Dataset has {len(dataset_mapping)} classes, but existing CSV has {len(existing_mapping)} classes")
-        return False
-    
-    for class_id, class_name in dataset_mapping.items():
-        if class_id not in existing_mapping:
-            print(f"[Warning] Class ID {class_id} ({class_name}) not found in existing CSV")
-            return False
-        if existing_mapping[class_id] != class_name:
-            print(f"[Warning] Class ID {class_id}: dataset has '{class_name}', CSV has '{existing_mapping[class_id]}'")
-            return False
-    
-    print(f"[Info] Dataset classes are consistent with existing class_mapping.csv")
-    return True
 
 
 def _load_finetune_weights(model, finetune_path, args):
@@ -323,10 +270,6 @@ def get_args_parser():
                         help='Start epoch')
     parser.add_argument('--eval', action='store_true',
                         help='Perform evaluation only')
-    parser.add_argument('--save-every', default=None, type=int,
-                        help='Save checkpoint every N epochs (in addition to best and latest)')
-    parser.add_argument('--eval-every', default=1, type=int,
-                        help='Evaluate on validation set every N epochs (default: 1)')
     parser.add_argument('--num_workers', default=16, type=int,  # 更多workers
                         help='Number of data loading workers')
     parser.add_argument('--pin-mem', action='store_true', default=True,
@@ -355,6 +298,10 @@ def get_args_parser():
                         help='Distillation alpha')
     parser.add_argument('--distillation-tau', default=1.0, type=float,
                         help='Distillation temperature')
+    parser.add_argument('--eval-every', default=1, type=int,
+                        help='Evaluate every N epochs (default: 1, evaluate every epoch)')
+    parser.add_argument('--save-every', default=None, type=int,
+                        help='Save checkpoint every N epochs (default: None, only save final and best checkpoints)')
 
     return parser
 
@@ -383,12 +330,6 @@ def main(args):
         output_dir.mkdir(parents=True, exist_ok=True)
         if utils.is_main_process():
             class_to_idx = _extract_class_to_idx(dataset_train)
-            
-            # 检查现有的class_mapping.csv并验证一致性
-            existing_mapping = _load_existing_class_mapping_csv(output_dir)
-            if existing_mapping:
-                _validate_class_mapping_consistency(class_to_idx, existing_mapping)
-            
             class_mapping_csv = _export_class_mapping_csv(class_to_idx, output_dir)
             if class_mapping_csv:
                 print(f"Saved class mapping CSV to {class_mapping_csv}")
@@ -397,7 +338,7 @@ def main(args):
     if not hasattr(args, 'class_mapping_csv'):
         setattr(args, 'class_mapping_csv', str(class_mapping_csv) if class_mapping_csv else '')
     
-    if args.distributed:
+    if True:  # args.distributed
         num_tasks = utils.get_world_size()
         global_rank = utils.get_rank()
         sampler_train = torch.utils.data.DistributedSampler(
@@ -565,7 +506,21 @@ def main(args):
         
         lr_scheduler.step(epoch)
         
-        if args.output_dir:
+        # 根据eval-every决定是否进行评估
+        test_stats = None
+        if (epoch + 1) % args.eval_every == 0 or epoch + 1 == args.epochs:
+            test_stats = evaluate(data_loader_val, model, device)
+            print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
+            max_accuracy = max(max_accuracy, test_stats["acc1"])
+            print(f'Max accuracy: {max_accuracy:.2f}%')
+        
+        # 根据save-every决定是否保存checkpoint（不影响最后epoch）
+        should_save_checkpoint = (
+            (args.save_every is not None and (epoch + 1) % args.save_every == 0) or  # 定期保存
+            epoch + 1 == args.epochs  # 最后epoch总是保存
+        )
+        
+        if args.output_dir and should_save_checkpoint:
             checkpoint_paths = [output_dir / 'checkpoint.pth']
             for checkpoint_path in checkpoint_paths:
                 utils.save_on_master({
@@ -577,47 +532,33 @@ def main(args):
                     'scaler': loss_scaler.state_dict(),
                     'args': args,
                 }, checkpoint_path)
+            print(f"Saved checkpoint at epoch {epoch + 1}")
         
-        if args.save_every and args.output_dir and (epoch + 1) % args.save_every == 0:
-            checkpoint_path = output_dir / f'checkpoint_epoch_{epoch + 1}.pth'
-            utils.save_on_master({
-                'model': model_without_ddp.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'lr_scheduler': lr_scheduler.state_dict(),
-                'epoch': epoch,
-                'model_ema': get_state_dict(model_ema) if model_ema is not None else None,
-                'scaler': loss_scaler.state_dict(),
-                'args': args,
-            }, checkpoint_path)
-            print(f'Saved checkpoint at epoch {epoch + 1}')
+        # 保存最佳模型（不受save-interval影响）
+        if args.output_dir and test_stats is not None and test_stats["acc1"] >= max_accuracy:
+            checkpoint_paths = [output_dir / 'best_checkpoint.pth']
+            for checkpoint_path in checkpoint_paths:
+                utils.save_on_master({
+                    'model': model_without_ddp.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'lr_scheduler': lr_scheduler.state_dict(),
+                    'epoch': epoch,
+                    'model_ema': get_state_dict(model_ema) if model_ema is not None else None,
+                    'scaler': loss_scaler.state_dict(),
+                    'args': args,
+                }, checkpoint_path)
+            print(f"Saved best checkpoint at epoch {epoch + 1} with accuracy {test_stats['acc1']:.2f}%")
         
-        should_eval = (epoch + 1) % args.eval_every == 0 or epoch == args.epochs - 1
-        
-        if should_eval:
-            test_stats = evaluate(data_loader_val, model, device)
-            print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
-            max_accuracy = max(max_accuracy, test_stats["acc1"])
-            print(f'Max accuracy: {max_accuracy:.2f}%')
-            
-            if args.output_dir and test_stats["acc1"] >= max_accuracy:
-                checkpoint_paths = [output_dir / 'best_checkpoint.pth']
-                for checkpoint_path in checkpoint_paths:
-                    utils.save_on_master({
-                        'model': model_without_ddp.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'lr_scheduler': lr_scheduler.state_dict(),
-                        'epoch': epoch,
-                        'model_ema': get_state_dict(model_ema) if model_ema is not None else None,
-                        'scaler': loss_scaler.state_dict(),
-                        'args': args,
-                    }, checkpoint_path)
+        # 记录日志
+        if test_stats is not None:
+            log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
+                         **{f'test_{k}': v for k, v in test_stats.items()},
+                         'epoch': epoch,
+                         'n_parameters': n_parameters}
         else:
-            test_stats = {'acc1': 0.0}  # 占位符，用于日志记录
-        
-        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                     **{f'test_{k}': v for k, v in test_stats.items()},
-                     'epoch': epoch,
-                     'n_parameters': n_parameters}
+            log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
+                         'epoch': epoch,
+                         'n_parameters': n_parameters}
         
         if args.output_dir and utils.is_main_process():
             with (output_dir / "log.txt").open("a") as f:

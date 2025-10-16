@@ -240,9 +240,9 @@ def lsnet_l_artist(num_classes=1000, distillation=False, pretrained=False,
         distillation=distillation,
         img_size=224,
         patch_size=8,
-        embed_dim=[160, 320, 480, 640],
-        depth=[6, 8, 12, 14],
-        num_heads=[4, 4, 4, 4],
+        embed_dim=[160, 320, 480, 640],  # 更大的embed_dim
+        depth=[6, 8, 12, 14],           # 更深的网络
+        num_heads=[4, 4, 4, 4],          # 更多的注意力头
         feature_dim=feature_dim,
         use_projection=use_projection,
         **kwargs
@@ -261,9 +261,9 @@ def lsnet_xl_artist(num_classes=1000, distillation=False, pretrained=False,
         distillation=distillation,
         img_size=224,
         patch_size=8,
-        embed_dim=[192, 384, 576, 768],
-        depth=[8, 12, 16, 20],
-        num_heads=[6, 6, 6, 6],
+        embed_dim=[192, 384, 576, 768],  # 超大embed_dim，支持10万+类别
+        depth=[8, 12, 16, 20],           # 超深网络，学习复杂特征
+        num_heads=[6, 6, 6, 6],           # 更多注意力头
         feature_dim=feature_dim,
         use_projection=use_projection,
         **kwargs
