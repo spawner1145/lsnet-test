@@ -22,7 +22,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                     clip_mode: str = 'norm',
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None,
                     set_training_mode=True,
-                    set_bn_eval=False,):
+                    set_bn_eval=False,
+                    accumulation_steps: int = 1):
     model.train(set_training_mode)
     if set_bn_eval:
         set_bn_state(model)
@@ -31,6 +32,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
         window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 100
+
+    # Gradient accumulation variables
+    accumulation_counter = 0
+    accumulated_loss = 0.0
 
     for samples, targets in metric_logger.log_every(
             data_loader, print_freq, header):
@@ -45,25 +50,47 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
             loss = criterion(samples, outputs, targets)
 
         loss_value = loss.item()
+        accumulated_loss += loss_value
+
+        # Scale loss for gradient accumulation
+        loss = loss / accumulation_steps
 
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             sys.exit(1)
 
-        optimizer.zero_grad()
-
         # this attribute is added by timm on one optimizer (adahessian)
         is_second_order = hasattr(
             optimizer, 'is_second_order') and optimizer.is_second_order
         loss_scaler(loss, optimizer, clip_grad=clip_grad, clip_mode=clip_mode,
-                    parameters=model.parameters(), create_graph=is_second_order)
+                    parameters=model.parameters(), create_graph=is_second_order,
+                    need_update=(accumulation_counter + 1) % accumulation_steps == 0)
 
+        accumulation_counter += 1
+
+        # Update metrics for every step (not just accumulation steps)
+        # This ensures proper logging even during accumulation
+        current_loss = accumulated_loss / accumulation_counter if accumulation_counter > 0 else loss_value
+        metric_logger.update(loss=current_loss)
+        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+
+        # Perform optimizer step and reset gradients after accumulation_steps
+        if accumulation_counter % accumulation_steps == 0:
+            torch.cuda.synchronize()
+            if model_ema is not None:
+                model_ema.update(model)
+
+            # Reset accumulation variables
+            accumulated_loss = 0.0
+
+    # Handle remaining accumulated gradients if any
+    if accumulation_counter % accumulation_steps != 0:
         torch.cuda.synchronize()
         if model_ema is not None:
             model_ema.update(model)
-
-        metric_logger.update(loss=loss_value)
+        metric_logger.update(loss=accumulated_loss / (accumulation_counter % accumulation_steps))
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)

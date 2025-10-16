@@ -279,7 +279,7 @@ if __name__ == "__main__":
     proxies = {"http://": 'http://127.0.0.1:7890', "https://": 'http://127.0.0.1:7890'}
     max_lines_per_batch = 5  # 每批处理的行数
     max_images = 50          # 一个tag最多爬的图片数
-    start_line = 102           # 开始处理的行号
+    start_line = 1           # 开始处理的行号
 
     while True:
         result = asyncio.run(main(

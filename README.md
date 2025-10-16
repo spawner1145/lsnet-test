@@ -92,7 +92,12 @@ python train_artist_style.py ^
 
 常用参数说明：
 
-- `--model`：可选 `lsnet_t_artist`、`lsnet_s_artist`、`lsnet_b_artist`，你可以在`model\lsnet_artist.py`里面自己改参数加预设
+- `--model`：可选 `lsnet_t_artist`、`lsnet_s_artist`、`lsnet_b_artist`、`lsnet_l_artist`，你可以在`model\lsnet_artist.py`里面自己改参数加预设
+  - `lsnet_t_artist`: Tiny模型，参数量约11.4M，适合快速实验
+  - `lsnet_s_artist`: Small模型，参数量约16.1M，平衡性能和效率
+  - `lsnet_b_artist`: Base模型，参数量约23.2M，更好的性能
+  - `lsnet_l_artist`: Large模型，参数量约50M+，适合大规模训练和更高精度需求
+  - `lsnet_xl_artist`: Extra Large模型，参数量约100M+，专门用于处理100万+图片、10万+类别的大数据集
 - `--finetune`：在验证阶段将图像等比缩放至训练分辨率，适用于迁移学习微调
 - `--dist-eval`：在验证阶段启用分布式采样，便于多卡同步评估
 - `--resume`：断点续训
@@ -101,26 +106,59 @@ python train_artist_style.py ^
 
 训练结束后，`output-dir` 下的 `class_mapping.csv` 将作为后续分类推理的唯一标签映射文件。
 
+> 📌 **类别一致性验证**：如果输出目录中已存在 `class_mapping.csv`，训练脚本会自动验证数据集类别是否与CSV一致，并输出警告信息确保数据完整性。
+
+### 数据集鲁棒性
+
+训练脚本已集成损坏图片处理机制：
+
+- **预过滤损坏图片**：在数据集初始化时自动检测并过滤掉无法读取的图片
+- **警告日志**：所有被过滤的图片都会在控制台输出详细警告信息
+- **数据集完整性**：确保训练过程中所有图片都是有效的，不会中断训练流程
+
+这确保了训练过程对数据集质量问题的容错性，适合处理包含少量损坏图片的真实数据集。
+
 ### 多卡训练（分布式启动）
 
 - `train_artist_style.py` 已集成 `torch.distributed`；`--batch-size` 指每张 GPU 的 batch，采样器会自动按世界大小拆分。
 - 推荐使用 **torchrun**（PyTorch≥1.10）启动。它会为每个进程设置 `RANK / LOCAL_RANK / WORLD_SIZE`，脚本会进入分布式模式。
-- 注意：PyTorch 的 NCCL 后端仅在 Linux/WSL 中支持 GPU 通信，原生 Windows 下若不使用 WSL 会报错；如必须在 Windows 原生环境实验，可把 `utils.init_distributed_mode` 中的 `args.dist_backend` 改为 `gloo`（仅 CPU 通信）。
-
-单机两卡示例（在 WSL 或 Linux Shell 下执行）：
-
-```bash
-torchrun --standalone --nnodes=1 --nproc_per_node=2 train_artist_style.py \
-  --model lsnet_t_artist \
-  --data-path /mnt/d/datasets/artist_dataset \
-  --output-dir /mnt/d/experiments/lsnet_t \
-  --batch-size 128 \
-  --epochs 400 \
-  --num_workers 8 \
-  --dist-eval
-```
-
-- 想限定可见 GPU，可在命令前加 `CUDA_VISIBLE_DEVICES=0,1`。
+- **Windows 多卡设置**：
+  - 使用 `gloo` 后端（已自动配置）
+  - 单机多卡示例：
+    ```batch
+    # 创建启动脚本 run_multigpu.bat
+    @echo off
+    set CUDA_VISIBLE_DEVICES=0,1
+    set MASTER_ADDR=127.0.0.1
+    set MASTER_PORT=12345
+    
+    start "GPU0" torchrun --standalone --nnodes=1 --nproc_per_node=2 ^
+      train_artist_style.py --model lsnet_t_artist --data-path your_data ^
+      --batch-size 32 --epochs 300 --output-dir output_dir
+    
+    # 或者使用环境变量方式
+    set RANK=0
+    set WORLD_SIZE=2
+    set LOCAL_RANK=0
+    python train_artist_style.py [args...]
+    ```
+- **Linux 多卡设置**：
+  - 使用 `nccl` 后端（已自动配置）
+  - 单机多卡示例：
+    ```bash
+    # 使用torchrun启动（推荐）
+    torchrun --standalone --nnodes=1 --nproc_per_node=2 \
+      train_artist_style.py --model lsnet_t_artist --data-path your_data \
+      --batch-size 32 --epochs 300 --output-dir output_dir
+    
+    # 或者使用CUDA_VISIBLE_DEVICES
+    CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nnodes=1 --nproc_per_node=2 \
+      train_artist_style.py --model lsnet_t_artist --data-path your_data \
+      --batch-size 32 --epochs 300 --output-dir output_dir
+    
+    # 或者使用提供的脚本
+    bash run_multigpu_linux.sh
+    ```
 - 断点续训继续多卡时添加 `--resume outputs_artist/checkpoint.pth`，总 batch 变化时请按比例调节 `--lr`。
 - 多机场景需要把 `torchrun` 换成带 `--nnodes`、`--node_rank`、`--master_addr`、`--master_port` 的多机参数，并保证各节点之间网络互通。
 
@@ -230,6 +268,8 @@ python predict_artist_multilabel.py ^
 - `cluster`：仅提取特征向量（无需 CSV）
 - `both`：同时输出分类结果与特征
 
+> 📌 **自动参数检测**：脚本会自动从 `class_mapping.csv` 读取类别数，从 checkpoint 检测特征维度，无需手动指定 `--num-classes` 或 `--feature-dim`。
+
 ### 单张图像分类
 
 ```powershell
@@ -239,8 +279,7 @@ python inference_artist.py ^
   --checkpoint D:\experiments\lsnet_t\model_best.pth ^
   --class-csv D:\experiments\lsnet_t\class_mapping.csv ^
   --input D:\samples\test.jpg ^
-  --output D:\results\single ^
-  --class-csv artist_dataset\class_mapping.csv
+  --output D:\results\single
 ```
 
 输出位于 `output\test_result.json`，内含 Top-K 预测类别及概率。
@@ -336,7 +375,54 @@ lsnet/
 └── ...                        # 其他性能测试与评估脚本
 ```
 
-## 后续建议
+## 大规模训练配置 (100万+图片，10万+类别)
+
+对于超大规模数据集，推荐使用以下配置：
+
+### 模型选择
+- 使用 `lsnet_xl_artist` 模型，专门为10万+类别优化
+- 特征维度设置为2048或更高
+- 启用projection层以获得更好的特征表示
+
+### 训练参数
+```powershell
+python train_artist_style.py ^
+  --model lsnet_xl_artist ^
+  --data-path D:\datasets\massive_artist_dataset ^
+  --batch-size 64 ^       # 每GPU批次大小
+  --accumulation-steps 4 ^ # 梯度累积，相当于256的有效批次大小
+  --epochs 300 ^          # 更长的训练时间
+  --lr 0.002 ^            # 更高的学习率
+  --weight-decay 0.1 ^    # 更大的权重衰减
+  --feature-dim 2048 ^    # 更大的特征维度
+  --num_workers 16 ^      # 更多数据加载进程
+  --output-dir D:\experiments\massive_training ^
+  --dist-eval              # 启用分布式评估
+```
+
+### 多GPU分布式训练
+```bash
+# 8GPU训练 (Linux/WSL)
+torchrun --standalone --nnodes=1 --nproc_per_node=8 train_artist_style.py \
+  --model lsnet_xl_artist \
+  --data-path /mnt/d/datasets/massive_dataset \
+  --batch-size 32 \
+  --accumulation-steps 8 \
+  --epochs 500 \
+  --lr 0.003 \
+  --weight-decay 0.15 \
+  --feature-dim 4096 \
+  --output-dir /mnt/d/experiments/massive_run
+```
+
+### 内存优化建议
+- **梯度累积**: 使用 `--accumulation-steps N` 来模拟更大的批次大小，减少显存占用
+  - 例如：`--batch-size 32 --accumulation-steps 4` 相当于有效批次大小128
+  - 学习率会自动根据有效批次大小进行缩放
+- 启用 `--pin-mem` 以加速数据加载
+- 使用 `--model-ema` 获得更稳定的训练
+- 定期保存checkpoint以便断点续训
+- 监控GPU内存使用，必要时减小batch-size
 
 - 若需集成到 Web 服务，可将 `inference_artist.py` 封装为 API，输出 JSON 结果或特征库查询。
 - 聚类模式生成的 `features.npy` 可直接接入 Faiss、Milvus 等相似度检索系统。

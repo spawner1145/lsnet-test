@@ -27,7 +27,7 @@ def get_args_parser():
     
     # 模型参数
     parser.add_argument('--model', default='lsnet_t_artist', type=str,
-                        choices=['lsnet_t_artist', 'lsnet_s_artist', 'lsnet_b_artist'],
+                        choices=['lsnet_t_artist', 'lsnet_s_artist', 'lsnet_b_artist', 'lsnet_l_artist', 'lsnet_xl_artist'],
                         help='Model architecture')
     parser.add_argument('--checkpoint', required=True, type=str,
                         help='Path to model checkpoint')
@@ -87,28 +87,45 @@ def resolve_num_classes(num_classes_arg: Optional[int],
                         class_mapping: Optional[Dict[int, str]],
                         state_dict) -> int:
     """根据参数、CSV 或 checkpoint 推断类别数"""
-    checkpoint_head_classes = None
-    for key, value in state_dict.items():
-        if key.endswith('head.weight') or key.endswith('head.l.weight'):
-            checkpoint_head_classes = value.shape[0]
-            break
+    # 优先使用CSV中的类别数
+    if class_mapping:
+        csv_classes = len(class_mapping)
+        if num_classes_arg is not None and num_classes_arg != csv_classes:
+            print(f"[Warning] 提供的 num_classes={num_classes_arg} 与 CSV 中的类别数 {csv_classes} 不一致，已使用 CSV 的值。")
+        return csv_classes
 
+    # 如果没有CSV，使用参数
     if num_classes_arg is not None:
-        if class_mapping and num_classes_arg != len(class_mapping):
-            print(f"[Warning] 提供的 num_classes={num_classes_arg} 与 CSV 中的类别数 {len(class_mapping)} 不一致，已使用 CSV 的值。")
-            return len(class_mapping)
         return num_classes_arg
 
-    if class_mapping:
-        if checkpoint_head_classes is not None and checkpoint_head_classes != len(class_mapping):
-            print(f"[Warning] checkpoint 分类头输出 {checkpoint_head_classes} 类，但 CSV 列表包含 {len(class_mapping)} 类，将以 CSV 为准。")
-        return len(class_mapping)
-
-    # 尝试从权重中解析分类头大小
+    # 最后尝试从权重中解析分类头大小
     for key, value in state_dict.items():
-        if key.endswith('head.weight'):
+        if key.endswith('head.weight') or key.endswith('head.l.weight'):
             return value.shape[0]
-    raise ValueError('无法推断 num_classes，请显式提供或提供 CSV 映射文件。')
+
+    raise ValueError('无法推断 num_classes，请提供 CSV 映射文件或显式指定 num_classes 参数。')
+
+
+def resolve_feature_dim(feature_dim_arg: Optional[int], state_dict) -> int:
+    """根据参数或 checkpoint 推断特征维度"""
+    if feature_dim_arg is not None:
+        return feature_dim_arg
+
+    # 尝试从权重中解析特征维度
+    # 查找head.bn.weight的维度，这通常是特征维度
+    for key, value in state_dict.items():
+        if key.endswith('head.bn.weight'):
+            return value.shape[0]
+
+    # 如果找不到，尝试查找其他可能的特征维度指示器
+    for key, value in state_dict.items():
+        if 'head' in key and 'weight' in key and len(value.shape) >= 2:
+            # 对于线性层，输入维度通常是特征维度
+            return value.shape[1] if len(value.shape) > 1 else value.shape[0]
+
+    # 默认值
+    print("[Warning] 无法从checkpoint推断特征维度，使用默认值384")
+    return 384
 
 
 def load_model(args, state_dict):
@@ -296,7 +313,7 @@ def process_directory(args, model, transform, class_mapping: Optional[Dict[int, 
     
     # 支持的图像格式
     image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
-    image_paths = [p for p in input_dir.glob('*') if p.suffix.lower() in image_extensions]
+    image_paths = [p for p in input_dir.glob('**/*') if p.suffix.lower() in image_extensions]
     
     if not image_paths:
         print(f"No images found in {input_dir}")
@@ -379,6 +396,7 @@ def main(args):
     state_dict = load_checkpoint_state(args.checkpoint)
     state_dict = normalize_state_dict_keys(state_dict)
     args.num_classes = resolve_num_classes(args.num_classes, class_mapping, state_dict)
+    args.feature_dim = resolve_feature_dim(args.feature_dim, state_dict)
 
     # 加载模型
     model = load_model(args, state_dict)

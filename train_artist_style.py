@@ -13,6 +13,7 @@ import json
 import os
 import logging
 from pathlib import Path
+from typing import Optional, Dict
 
 #python train_artist_style.py --model lsnet_t_artist --data-path artist_dataset --output-dir outputs_artist --batch-size 128 --epochs 400 --num_workers 8
 #python train_artist_style.py --model lsnet_t_artist --data-path artist_dataset --output-dir outputs_artist --batch-size 128 --epochs 400 --num_workers 8 --resume outputs_artist\checkpoint.pth
@@ -99,6 +100,57 @@ def _export_class_mapping_csv(class_to_idx, output_dir: Path) -> Path:
     return csv_path
 
 
+def _load_existing_class_mapping_csv(output_dir: Path) -> Optional[Dict[int, str]]:
+    """Load existing class mapping CSV if it exists."""
+    csv_path = output_dir / 'class_mapping.csv'
+    if not csv_path.exists():
+        return None
+    
+    mapping = {}
+    try:
+        with csv_path.open('r', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames or 'class_id' not in reader.fieldnames or 'class_name' not in reader.fieldnames:
+                print(f"[Warning] Invalid CSV format in {csv_path}, ignoring existing file")
+                return None
+            
+            for row in reader:
+                class_id = int(row['class_id'])
+                class_name = row['class_name']
+                mapping[class_id] = class_name
+    except Exception as e:
+        print(f"[Warning] Failed to load existing class mapping CSV: {e}")
+        return None
+    
+    return mapping
+
+
+def _validate_class_mapping_consistency(dataset_classes: Dict[str, int], 
+                                       existing_mapping: Dict[int, str]) -> bool:
+    """Validate that dataset classes are consistent with existing CSV mapping."""
+    if not existing_mapping:
+        return True
+    
+    # Convert dataset classes (name->id) to id->name for comparison
+    dataset_mapping = {class_id: class_name for class_name, class_id in dataset_classes.items()}
+    
+    # Check if mappings are consistent
+    if len(dataset_mapping) != len(existing_mapping):
+        print(f"[Warning] Dataset has {len(dataset_mapping)} classes, but existing CSV has {len(existing_mapping)} classes")
+        return False
+    
+    for class_id, class_name in dataset_mapping.items():
+        if class_id not in existing_mapping:
+            print(f"[Warning] Class ID {class_id} ({class_name}) not found in existing CSV")
+            return False
+        if existing_mapping[class_id] != class_name:
+            print(f"[Warning] Class ID {class_id}: dataset has '{class_name}', CSV has '{existing_mapping[class_id]}'")
+            return False
+    
+    print(f"[Info] Dataset classes are consistent with existing class_mapping.csv")
+    return True
+
+
 def _load_finetune_weights(model, finetune_path, args):
     print(f"Finetuning from checkpoint: {finetune_path}")
     if finetune_path.startswith('https'):
@@ -150,19 +202,21 @@ def get_args_parser():
     parser = argparse.ArgumentParser('LSNet Artist Style Training', add_help=False)
     
     # 基本参数
-    parser.add_argument('--batch-size', default=128, type=int,
-                        help='Batch size per GPU')
-    parser.add_argument('--epochs', default=300, type=int,
-                        help='Total training epochs')
+    parser.add_argument('--batch-size', default=64, type=int,  # 为大规模训练优化
+                        help='Batch size per GPU (optimized for large datasets)')
+    parser.add_argument('--epochs', default=200, type=int,  # 更长的训练时间
+                        help='Total training epochs (longer for large datasets)')
+    parser.add_argument('--accumulation-steps', default=1, type=int,  # 可以设置梯度累积
+                        help='Gradient accumulation steps (set >1 for larger effective batch size)')
     
     # 模型参数
     parser.add_argument('--model', default='lsnet_t_artist', type=str, 
-                        choices=['lsnet_t_artist', 'lsnet_s_artist', 'lsnet_b_artist'],
+                        choices=['lsnet_t_artist', 'lsnet_s_artist', 'lsnet_b_artist', 'lsnet_l_artist', 'lsnet_xl_artist'],
                         help='Model architecture')
     parser.add_argument('--input-size', default=224, type=int, 
                         help='Input image size')
-    parser.add_argument('--feature-dim', default=None, type=int,
-                        help='Feature dimension for clustering (default: use model default)')
+    parser.add_argument('--feature-dim', default=2048, type=int,  # 更大的特征维度
+                        help='Feature dimension for clustering (larger for massive classes)')
     parser.add_argument('--finetune', action='store_true', default=False,
                         help='Resize validation images to fine-tune resolution')
     parser.add_argument('--use-projection', action='store_true', default=True,
@@ -189,13 +243,13 @@ def get_args_parser():
                         help='Gradient clipping mode')
     parser.add_argument('--momentum', type=float, default=0.9,
                         help='SGD momentum')
-    parser.add_argument('--weight-decay', type=float, default=0.05,
-                        help='Weight decay')
+    parser.add_argument('--weight-decay', type=float, default=0.1,  # 更大的weight decay
+                        help='Weight decay (higher for large models)')
 
     # 学习率调度参数
     parser.add_argument('--sched', default='cosine', type=str,
                         help='LR scheduler')
-    parser.add_argument('--lr', type=float, default=1e-3,
+    parser.add_argument('--lr', type=float, default=1e-3,  # 更大的学习率
                         help='Learning rate')
     parser.add_argument('--lr-noise', type=float, nargs='+', default=None,
                         help='Learning rate noise')
@@ -250,7 +304,7 @@ def get_args_parser():
                         help='Dataset path (ImageFolder format)')
     parser.add_argument('--data-set', default='IMNET', type=str,
                         help='Dataset type (use IMNET for ImageFolder format)')
-    parser.add_argument('--num-classes', default=100, type=int,
+    parser.add_argument('--num-classes', default=None, type=int,  # 自动检测类别数
                         help='Number of artist classes')
     parser.add_argument('--inat-category', default='name', type=str,
                         help='Label category to use for INat datasets')
@@ -268,7 +322,7 @@ def get_args_parser():
                         help='Start epoch')
     parser.add_argument('--eval', action='store_true',
                         help='Perform evaluation only')
-    parser.add_argument('--num_workers', default=10, type=int,
+    parser.add_argument('--num_workers', default=16, type=int,  # 更多workers
                         help='Number of data loading workers')
     parser.add_argument('--pin-mem', action='store_true', default=True,
                         help='Pin CPU memory in DataLoader')
@@ -324,6 +378,12 @@ def main(args):
         output_dir.mkdir(parents=True, exist_ok=True)
         if utils.is_main_process():
             class_to_idx = _extract_class_to_idx(dataset_train)
+            
+            # 检查现有的class_mapping.csv并验证一致性
+            existing_mapping = _load_existing_class_mapping_csv(output_dir)
+            if existing_mapping:
+                _validate_class_mapping_consistency(class_to_idx, existing_mapping)
+            
             class_mapping_csv = _export_class_mapping_csv(class_to_idx, output_dir)
             if class_mapping_csv:
                 print(f"Saved class mapping CSV to {class_mapping_csv}")
@@ -332,7 +392,7 @@ def main(args):
     if not hasattr(args, 'class_mapping_csv'):
         setattr(args, 'class_mapping_csv', str(class_mapping_csv) if class_mapping_csv else '')
     
-    if True:  # args.distributed
+    if args.distributed:
         num_tasks = utils.get_world_size()
         global_rank = utils.get_rank()
         sampler_train = torch.utils.data.DistributedSampler(
@@ -414,7 +474,9 @@ def main(args):
     print(f'Number of params: {n_parameters}')
     
     # 创建优化器
-    linear_scaled_lr = args.lr * args.batch_size * utils.get_world_size() / 512.0
+    # 考虑梯度累积的有效batch size进行学习率缩放
+    effective_batch_size = args.batch_size * args.accumulation_steps * utils.get_world_size()
+    linear_scaled_lr = args.lr * effective_batch_size / 512.0
     args.lr = linear_scaled_lr
     optimizer = create_optimizer(args, model_without_ddp)
     loss_scaler = NativeScaler()
@@ -492,7 +554,8 @@ def main(args):
             model, criterion, data_loader_train,
             optimizer, device, epoch, loss_scaler,
             args.clip_grad, args.clip_mode, model_ema, mixup_fn,
-            set_training_mode=True
+            set_training_mode=True,
+            accumulation_steps=args.accumulation_steps
         )
         
         lr_scheduler.step(epoch)
