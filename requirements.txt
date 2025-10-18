@@ -1,14 +1,11 @@
-einops==0.4.1
+einops
 fvcore
 easydict
 matplotlib
 yacs
-scikit-image==0.19.3
+scikit-image
 wandb
-torch==2.4.1
-scikit-learn>=1.0
-
-torch>=1.10.0
+torch>=2.4.1
 torchvision>=0.11.0
 
 timm
