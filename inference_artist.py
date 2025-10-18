@@ -56,6 +56,10 @@ def get_args_parser():
                         help='Batch size for batch inference')
     parser.add_argument('--allow-head-reinit', action='store_true', default=False,
                         help='Allow re-initializing classification head when checkpoint classes mismatch')
+    parser.add_argument('--top-k', default=5, type=int,
+                        help='Number of top predictions to show (default: 5)')
+    parser.add_argument('--threshold', default=0.0, type=float,
+                        help='Probability threshold to filter predictions (default: 0.0)')
     
     return parser
 
@@ -236,7 +240,7 @@ def preprocess_image(image_path, transform):
     return tensor.unsqueeze(0)
 
 
-def classify_image(model, image_tensor, device, class_mapping: Optional[Dict[int, str]] = None, top_k=5):
+def classify_image(model, image_tensor, device, class_mapping: Optional[Dict[int, str]] = None, top_k=5, threshold=0.0):
     """对图像进行分类"""
     with torch.no_grad():
         image_tensor = image_tensor.to(device)
@@ -251,12 +255,17 @@ def classify_image(model, image_tensor, device, class_mapping: Optional[Dict[int
         
         results = []
         for prob, idx in zip(top_probs[0].cpu().numpy(), top_indices[0].cpu().numpy()):
-            class_name = class_mapping.get(int(idx), f"Class {idx}") if class_mapping else f"Class {idx}"
-            results.append({
-                'class_id': int(idx),
-                'class_name': class_name,
-                'probability': float(prob)
-            })
+            if prob >= threshold:
+                class_name = class_mapping.get(int(idx), f"Class {idx}") if class_mapping else f"Class {idx}"
+                results.append({
+                    'class_id': int(idx),
+                    'class_name': class_name,
+                    'probability': float(prob)
+                })
+        
+        # 如果过滤后结果少于 top_k，保持原样；否则取前 top_k
+        if len(results) > top_k:
+            results = results[:top_k]
         
         return results
 
@@ -287,7 +296,7 @@ def process_single_image(args, model, transform, class_mapping: Optional[Dict[in
     # 分类模式
     if args.mode in ['classify', 'both']:
         print("\n[Classification Results]")
-        classification = classify_image(model, image_tensor, args.device, class_mapping)
+        classification = classify_image(model, image_tensor, args.device, class_mapping, args.top_k, args.threshold)
         results['classification'] = classification
         
         for i, result in enumerate(classification, 1):
@@ -349,7 +358,7 @@ def process_directory(args, model, transform, class_mapping: Optional[Dict[int, 
             if args.mode in ['classify', 'both']:
                 logits = model(batch_tensor, return_features=False)
                 probs = F.softmax(logits, dim=-1)
-                top_probs, top_indices = torch.topk(probs, k=1, dim=-1)
+                top_probs, top_indices = torch.topk(probs, k=min(args.top_k, probs.size(-1)), dim=-1)
             
             if args.mode in ['cluster', 'both']:
                 features = model(batch_tensor, return_features=True)
@@ -362,14 +371,26 @@ def process_directory(args, model, transform, class_mapping: Optional[Dict[int, 
             result = {'image': path.name}
             
             if args.mode in ['classify', 'both']:
-                class_id = int(top_indices[j, 0].cpu().numpy())
-                prob = float(top_probs[j, 0].cpu().numpy())
-                class_name = class_mapping.get(class_id, f"Class {class_id}") if class_mapping else f"Class {class_id}"
-                result['classification'] = {
-                    'class_id': class_id,
-                    'class_name': class_name,
-                    'probability': prob
-                }
+                # 获取该图像的 top-k 结果
+                img_top_probs = top_probs[j].cpu().numpy()
+                img_top_indices = top_indices[j].cpu().numpy()
+                
+                classifications = []
+                for prob, idx in zip(img_top_probs, img_top_indices):
+                    if prob >= args.threshold:
+                        class_id = int(idx)
+                        class_name = class_mapping.get(class_id, f"Class {class_id}") if class_mapping else f"Class {class_id}"
+                        classifications.append({
+                            'class_id': class_id,
+                            'class_name': class_name,
+                            'probability': float(prob)
+                        })
+                
+                # 如果需要，取前 top_k
+                if len(classifications) > args.top_k:
+                    classifications = classifications[:args.top_k]
+                
+                result['classification'] = classifications
             
             if args.mode in ['cluster', 'both']:
                 result['features'] = features[j].cpu().numpy().tolist()
