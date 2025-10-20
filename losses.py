@@ -13,7 +13,7 @@ class VectorQuantizer(nn.Module):
         self.embedding_dim = embedding_dim
         self.commitment_cost = commitment_cost
 
-        # Codebook
+        # Codebook - will be moved to correct device on first forward pass
         self.embedding = nn.Embedding(num_embeddings, embedding_dim)
         self.embedding.weight.data.uniform_(-1.0 / num_embeddings, 1.0 / num_embeddings)
 
@@ -27,6 +27,10 @@ class VectorQuantizer(nn.Module):
             vq_loss: scalar
             indices: (batch_size,) - codebook indices
         """
+        # Ensure embedding is on the same device as inputs
+        if self.embedding.weight.device != inputs.device:
+            self.embedding = self.embedding.to(inputs.device)
+        
         # Flatten input
         flat_input = inputs.view(-1, self.embedding_dim)
 
@@ -165,6 +169,8 @@ class ContrastiveLoss(torch.nn.Module):
             if self.use_vq and self.vq_embedding_dim is None:
                 self.vq_embedding_dim = self.dim
                 self.vq_layer = VectorQuantizer(self.vq_num_embeddings, self.vq_embedding_dim, self.vq_commitment_cost)
+                # Move VQ layer to the same device as features
+                self.vq_layer = self.vq_layer.to(features.device)
             if self.use_queue:
                 self.register_buffer("queue", torch.randn(self.dim, self.queue_size))
                 self.queue = F.normalize(self.queue, dim=0)
