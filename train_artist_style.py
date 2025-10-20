@@ -465,6 +465,7 @@ def main(args):
             vq_embedding_dim=256,  # 使用默认特征维度
             vq_commitment_cost=args.vq_commitment_cost
         )
+        contrastive_criterion.to(device)
     
     teacher_model = None
     if args.distillation_type != 'none':
