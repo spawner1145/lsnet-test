@@ -144,10 +144,13 @@ class ContrastiveLoss(torch.nn.Module):
         self.dim = dim  # Will be set on first forward pass if None
 
         if self.use_vq:
-            self.vq_embedding_dim = vq_embedding_dim  # Will be set on first forward pass if None
+            self.vq_embedding_dim = vq_embedding_dim
             self.vq_num_embeddings = vq_num_embeddings
             self.vq_commitment_cost = vq_commitment_cost
-            # VQ layer will be created on first forward pass
+            # Create VQ layer immediately if embedding_dim is provided
+            if self.vq_embedding_dim is not None:
+                self.vq_layer = VectorQuantizer(self.vq_num_embeddings, self.vq_embedding_dim, self.vq_commitment_cost)
+            # Otherwise, VQ layer will be created on first forward pass
 
         if self.use_queue:
             # Queue will be initialized on first forward pass when we know the dimension
