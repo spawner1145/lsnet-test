@@ -60,7 +60,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                     else:
                         ce_loss = criterion(outputs, targets)
                     
-                    contrastive_loss, vq_loss = contrastive_criterion(features, targets)
+                    # Convert one-hot targets to class indices for contrastive loss
+                    if targets.dim() > 1 and targets.shape[1] > 1:
+                        # One-hot encoded targets (from mixup)
+                        contrastive_labels = targets.argmax(dim=1)
+                    else:
+                        # Class indices
+                        contrastive_labels = targets
+                    
+                    contrastive_loss, vq_loss = contrastive_criterion(features, contrastive_labels)
                     
                     # Combine losses: base CE + contrastive + VQ + distillation (if enabled)
                     loss = ce_loss + contrastive_weight * contrastive_loss + vq_loss

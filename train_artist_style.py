@@ -462,7 +462,6 @@ def main(args):
             temperature=args.contrastive_temperature,
             use_vq=args.use_vq,
             vq_num_embeddings=args.vq_num_embeddings,
-            vq_embedding_dim=args.feature_dim,  # 使用实际特征维度
             vq_commitment_cost=args.vq_commitment_cost
         )
         contrastive_criterion.to(device)
