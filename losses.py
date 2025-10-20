@@ -237,7 +237,7 @@ class ContrastiveLoss(torch.nn.Module):
         mean_log_prob_pos = (mask * log_prob).sum(1) / mask_pos_pairs
 
         # Loss
-        loss = - (self.temperature / 0.07) * mean_log_prob_pos
+        loss = - mean_log_prob_pos
         loss = loss.mean()
 
         return loss
