@@ -112,6 +112,16 @@ class DistillationLoss(torch.nn.Module):
         loss = base_loss * (1 - self.alpha) + distillation_loss * self.alpha
         return loss
 
+    def get_base_loss(self, outputs, labels):
+        """
+        Get the base criterion loss without distillation.
+        """
+        outputs_kd = None
+        if not isinstance(outputs, torch.Tensor):
+            # assume that the model outputs a tuple of [outputs, outputs_kd]
+            outputs, outputs_kd = outputs
+        return self.base_criterion(outputs, labels)
+
 
 class ContrastiveLoss(torch.nn.Module):
     """

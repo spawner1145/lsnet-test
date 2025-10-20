@@ -53,9 +53,22 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                 if contrastive_criterion is not None:
                     # For contrastive loss, get both features and outputs
                     features, outputs = model(samples, return_both=True)
-                    ce_loss = criterion(samples, outputs, targets)
+                    
+                    # Get base cross-entropy loss (without distillation)
+                    if hasattr(criterion, 'get_base_loss'):
+                        ce_loss = criterion.get_base_loss(outputs, targets)
+                    else:
+                        ce_loss = criterion(outputs, targets)
+                    
                     contrastive_loss, vq_loss = contrastive_criterion(features, targets)
+                    
+                    # Combine losses: base CE + contrastive + VQ + distillation (if enabled)
                     loss = ce_loss + contrastive_weight * contrastive_loss + vq_loss
+                    
+                    # Add distillation loss if enabled
+                    if hasattr(criterion, 'distillation_type') and criterion.distillation_type != 'none':
+                        distillation_loss = criterion(samples, outputs, targets) - ce_loss
+                        loss = loss + distillation_loss
                 else:
                     outputs = model(samples)
                     loss = criterion(samples, outputs, targets)
