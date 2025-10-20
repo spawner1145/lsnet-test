@@ -310,7 +310,7 @@ def get_args_parser():
                         help='Use Vector Quantization in contrastive loss')
     parser.add_argument('--vq-num-embeddings', type=int, default=256,
                         help='Number of embeddings in VQ codebook')
-    parser.add_argument('--vq-commitment-cost', type=float, default=0.25,
+    parser.add_argument('--vq-commitment-cost', type=float, default=0.1,
                         help='Commitment cost for VQ loss')
     parser.add_argument('--eval-every', default=1, type=int,
                         help='Evaluate every N epochs (default: 1, evaluate every epoch)')

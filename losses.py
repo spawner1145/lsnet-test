@@ -13,9 +13,10 @@ class VectorQuantizer(nn.Module):
         self.embedding_dim = embedding_dim
         self.commitment_cost = commitment_cost
 
-        # Codebook - will be moved to correct device on first forward pass
+        # Codebook - initialize with larger range for better feature preservation
         self.embedding = nn.Embedding(num_embeddings, embedding_dim)
-        self.embedding.weight.data.uniform_(-1.0 / num_embeddings, 1.0 / num_embeddings)
+        # Use larger initialization range to preserve feature magnitude
+        self.embedding.weight.data.uniform_(-1.0, 1.0)
 
     def forward(self, inputs):
         """
@@ -46,11 +47,12 @@ class VectorQuantizer(nn.Module):
 
         # Quantize
         quantized = torch.matmul(encodings, self.embedding.weight)
-
-        # VQ Loss
-        vq_loss = F.mse_loss(quantized.detach(), flat_input)
-        commitment_loss = F.mse_loss(quantized, flat_input.detach())
-        vq_loss += self.commitment_cost * commitment_loss
+        # VQ Loss: codebook loss updates embeddings, commitment loss updates encoder
+        # codebook: gradient should flow to embedding weights -> quantized vs flat_input.detach()
+        codebook_loss = F.mse_loss(quantized, flat_input.detach())
+        # commitment: gradient flows to encoder -> quantized.detach() vs flat_input
+        commitment_loss = self.commitment_cost * F.mse_loss(quantized.detach(), flat_input)
+        vq_loss = codebook_loss + commitment_loss
 
         # Straight-through estimator
         quantized = flat_input + (quantized - flat_input).detach()
@@ -155,6 +157,12 @@ class ContrastiveLoss(torch.nn.Module):
         if self.use_queue:
             # Queue will be initialized on first forward pass when we know the dimension
             self.queue_size = queue_size
+            # If dim is already provided at construction time, initialize queue buffers now
+            if self.dim is not None:
+                # register buffers so they move with the module
+                self.register_buffer("queue", torch.randn(self.dim, self.queue_size))
+                self.queue = F.normalize(self.queue, dim=0)
+                self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
 
     def forward(self, features, labels):
         """
@@ -279,10 +287,27 @@ class ContrastiveLoss(torch.nn.Module):
         batch_size = keys.shape[0]
 
         ptr = int(self.queue_ptr)
-        assert self.queue.shape[1] % batch_size == 0  # for simplicity
+        qsize = self.queue.shape[1]
 
-        # Replace the keys at ptr
-        self.queue[:, ptr:ptr + batch_size] = keys.T
-        ptr = (ptr + batch_size) % self.queue.shape[1]
+        # transpose keys to shape (dim, batch)
+        keys_t = keys.T
+        k = keys_t.shape[1]
+
+        # If batch >= queue size, keep only the last qsize keys
+        if k >= qsize:
+            self.queue[:] = keys_t[:, -qsize:]
+            ptr = 0
+        else:
+            end = ptr + k
+            if end <= qsize:
+                # contiguous write
+                self.queue[:, ptr:end] = keys_t
+                ptr = end % qsize
+            else:
+                # wrap-around
+                first_part = qsize - ptr
+                self.queue[:, ptr:qsize] = keys_t[:, :first_part]
+                self.queue[:, :end % qsize] = keys_t[:, first_part:]
+                ptr = end % qsize
 
         self.queue_ptr[0] = ptr
