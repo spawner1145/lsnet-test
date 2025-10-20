@@ -175,7 +175,7 @@ class ContrastiveLoss(torch.nn.Module):
         
         # Create mask for positive pairs (same class)
         labels = labels.unsqueeze(1)
-        positive_mask = torch.eq(labels, labels.T).float()
+        positive_mask = torch.eq(labels, labels.mT).float()
         positive_mask.fill_diagonal_(0)  # Remove self-similarity
         
         # Create mask for negative pairs (different class)

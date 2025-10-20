@@ -56,15 +56,15 @@ class SmoothedValue(object):
 
     @property
     def global_avg(self):
-        return self.total / self.count
+        return self.total / self.count if self.count > 0 else 0.0
 
     @property
     def max(self):
-        return max(self.deque)
+        return max(self.deque) if self.deque else 0.0
 
     @property
     def value(self):
-        return self.deque[-1]
+        return self.deque[-1] if self.deque else 0.0
 
     def __str__(self):
         return self.fmt.format(

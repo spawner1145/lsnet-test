@@ -217,7 +217,7 @@ def get_args_parser():
     parser.add_argument('--color-jitter', type=float, default=0.4,
                         help='Color jitter factor')
     parser.add_argument('--aa', type=str, default='rand-m9-mstd0.5-inc1',
-                        help='AutoAugment policy')
+                        help='AutoAugment policy. Use "none" to disable.')
     parser.add_argument('--smoothing', type=float, default=0.1,
                         help='Label smoothing')
     parser.add_argument('--train-interpolation', type=str, default='bicubic',
@@ -462,7 +462,7 @@ def main(args):
             temperature=args.contrastive_temperature,
             use_vq=args.use_vq,
             vq_num_embeddings=args.vq_num_embeddings,
-            vq_embedding_dim=256,  # 使用默认特征维度
+            vq_embedding_dim=args.feature_dim,  # 使用实际特征维度
             vq_commitment_cost=args.vq_commitment_cost
         )
         contrastive_criterion.to(device)
