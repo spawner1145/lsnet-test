@@ -23,7 +23,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None,
                     set_training_mode=True,
                     set_bn_eval=False,
-                    accumulation_steps: int = 1):
+                    accumulation_steps: int = 1,
+                    contrastive_criterion=None,
+                    contrastive_weight=0.1):
     model.train(set_training_mode)
     if set_bn_eval:
         set_bn_state(model)
@@ -48,8 +50,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                 samples, targets = mixup_fn(samples, targets)
 
             with torch.amp.autocast(enabled=False, device_type="cuda"):
-                outputs = model(samples)
-                loss = criterion(samples, outputs, targets)
+                if contrastive_criterion is not None:
+                    # For contrastive loss, get both features and outputs
+                    features, outputs = model(samples, return_both=True)
+                    ce_loss = criterion(samples, outputs, targets)
+                    contrastive_loss, vq_loss = contrastive_criterion(features, targets)
+                    loss = ce_loss + contrastive_weight * contrastive_loss + vq_loss
+                else:
+                    outputs = model(samples)
+                    loss = criterion(samples, outputs, targets)
 
             loss_value = loss.item()
             accumulated_loss += loss_value

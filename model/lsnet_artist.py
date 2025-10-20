@@ -85,7 +85,7 @@ class LSNetArtist(LSNet):
         x = self.projection(x)
         return x
     
-    def forward(self, x, return_features=False):
+    def forward(self, x, return_features=False, return_both=False):
         """
         前向传播
         
@@ -93,10 +93,12 @@ class LSNetArtist(LSNet):
             x: 输入图像
             return_features: 是否只返回特征向量（用于聚类）
                            False时返回分类logits（用于分类）
+            return_both: 是否同时返回特征向量和分类logits（用于对比损失）
         
         Returns:
             如果return_features=True: 返回特征向量 (batch_size, feature_dim)
-            如果return_features=False: 返回分类logits (batch_size, num_classes)
+            如果return_both=True: 返回 (features, logits)
+            如果return_features=False and return_both=False: 返回分类logits (batch_size, num_classes)
         """
         features = self.forward_features(x)
         
@@ -106,13 +108,16 @@ class LSNetArtist(LSNet):
         
         # 返回分类结果
         if self.distillation:
-            x = self.head(features), self.head_dist(features)
+            logits = self.head(features), self.head_dist(features)
             if not self.training:
-                x = (x[0] + x[1]) / 2
+                logits = (logits[0] + logits[1]) / 2
         else:
-            x = self.head(features)
+            logits = self.head(features)
         
-        return x
+        if return_both:
+            return features, logits
+        
+        return logits
     
     def get_features(self, x):
         """

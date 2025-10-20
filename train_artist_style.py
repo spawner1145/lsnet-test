@@ -35,7 +35,7 @@ from data.samplers import RASampler
 from data.datasets import build_dataset
 from data.threeaugment import new_data_aug_generator
 from engine import train_one_epoch, evaluate
-from losses import DistillationLoss
+from losses import DistillationLoss, ContrastiveLoss
 
 from model import lsnet_artist
 import utils
@@ -298,6 +298,20 @@ def get_args_parser():
                         help='Distillation alpha')
     parser.add_argument('--distillation-tau', default=1.0, type=float,
                         help='Distillation temperature')
+    
+    # 对比损失参数
+    parser.add_argument('--contrastive-loss', action='store_true', default=False,
+                        help='Enable supervised contrastive loss')
+    parser.add_argument('--contrastive-weight', type=float, default=0.0,
+                        help='Weight for contrastive loss (0.0 = disabled, 1.0 = equal weight)')
+    parser.add_argument('--contrastive-temperature', type=float, default=0.07,
+                        help='Temperature for contrastive loss')
+    parser.add_argument('--use-vq', action='store_true', default=False,
+                        help='Use Vector Quantization in contrastive loss')
+    parser.add_argument('--vq-num-embeddings', type=int, default=256,
+                        help='Number of embeddings in VQ codebook')
+    parser.add_argument('--vq-commitment-cost', type=float, default=0.25,
+                        help='Commitment cost for VQ loss')
     parser.add_argument('--eval-every', default=1, type=int,
                         help='Evaluate every N epochs (default: 1, evaluate every epoch)')
     parser.add_argument('--save-every', default=None, type=int,
@@ -438,6 +452,20 @@ def main(args):
     else:
         criterion = torch.nn.CrossEntropyLoss()
     
+    # 创建对比损失（如果启用）
+    contrastive_criterion = None
+    if args.contrastive_loss:
+        # 如果启用对比损失但权重为0，则使用默认权重0.1
+        if args.contrastive_weight == 0.0:
+            args.contrastive_weight = 0.1
+        contrastive_criterion = ContrastiveLoss(
+            temperature=args.contrastive_temperature,
+            use_vq=args.use_vq,
+            vq_num_embeddings=args.vq_num_embeddings,
+            vq_embedding_dim=256,  # 使用默认特征维度
+            vq_commitment_cost=args.vq_commitment_cost
+        )
+    
     teacher_model = None
     if args.distillation_type != 'none':
         assert args.teacher_path, 'need to specify teacher-path when using distillation'
@@ -501,7 +529,9 @@ def main(args):
             optimizer, device, epoch, loss_scaler,
             args.clip_grad, args.clip_mode, model_ema, mixup_fn,
             set_training_mode=True,
-            accumulation_steps=args.accumulation_steps
+            accumulation_steps=args.accumulation_steps,
+            contrastive_criterion=contrastive_criterion,
+            contrastive_weight=args.contrastive_weight
         )
         
         lr_scheduler.step(epoch)

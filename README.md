@@ -5,7 +5,7 @@
 ## 功能概览
 
 - **数据准备**：`prepare_dataset.py` 自动将原始画师文件夹划分为 ImageFolder 结构，并生成 `class_mapping.csv` 等元信息。
-- **模型训练**：`train_artist_style.py` 支持多种 LSNet 画师模型，训练结束自动导出类别映射 CSV 及模型权重。
+- **模型训练**：`train_artist_style.py` 支持多种 LSNet 画师模型，支持对比损失增强训练，训练结束自动导出类别映射 CSV 及模型权重。
 - **推理部署**：`inference_artist.py` 在分类模式下依赖训练生成的 `class_mapping.csv` 进行标签映射，可选提取特征进行聚类或二者同时执行。
 - **多标签任务**：`train_artist_multilabel.py` 支持基于多标签 CSV 的训练与评估，`predict_artist_multilabel.py` 提供批量推理与置信度/比重导出。
 - **工具脚本**：`utils.py`、`losses.py`、`robust_utils.py` 等辅助训练；`flops.py`、`speed.py`、`eval.sh` 等用于性能测算与评测。
@@ -105,8 +105,107 @@ python train_artist_style.py ^
 - `--resume`：断点续训
 - `--finetune-from`：仅加载指定 checkpoint 的模型权重（会忽略优化器等训练状态），常用于迁移学习；若分类数不一致会自动重置分类头
 - `--teacher-model` / `--teacher-path`：配置蒸馏教师模型及权重
+- `--contrastive-loss`：启用监督对比损失，提升特征表示质量
+- `--contrastive-weight`：对比损失权重（默认0.1，0.0=禁用，1.0=与交叉熵等权重）
+- `--contrastive-temperature`：对比损失温度参数（默认0.07，控制学习严格程度）
+- `--use-vq`：在对比损失中启用向量量化（VQ-VAE风格）
+- `--vq-num-embeddings`：VQ代码本大小（默认256）
+- `--vq-commitment-cost`：VQ承诺损失权重（默认0.25）
 
 训练结束后，`output-dir` 下的 `class_mapping.csv` 将作为后续分类推理的唯一标签映射文件。
+
+### 对比损失增强训练
+
+从 v1.1.0 开始，`train_artist_style.py` 支持**监督对比损失**，可以显著提升特征表示质量和分类性能。
+
+#### 对比损失原理
+
+对比损失通过以下方式改善模型：
+- **正样本拉近**：同一画师的作品特征向量更相似
+- **负样本推远**：不同画师的作品特征向量更远离
+- **特征归一化**：使用余弦相似度计算距离
+- **联合优化**：与交叉熵损失协同工作
+
+#### 使用方法
+
+```powershell
+# 推荐配置：启用对比损失，默认权重
+python train_artist_style.py ^
+  --model lsnet_t_artist ^
+  --data-path D:\datasets\artist_dataset ^
+  --output-dir D:\experiments\lsnet_t_contrastive ^
+  --batch-size 128 ^
+  --epochs 300 ^
+  --contrastive-loss
+
+# 自定义权重配置
+python train_artist_style.py ^
+  --model lsnet_t_artist ^
+  --data-path D:\datasets\artist_dataset ^
+  --output-dir D:\experiments\lsnet_t_contrastive ^
+  --batch-size 128 ^
+  --epochs 300 ^
+  --contrastive-loss ^
+  --contrastive-weight 0.2 ^
+  --contrastive-temperature 0.05
+```
+
+#### 参数说明
+
+- `--contrastive-loss`：启用监督对比损失
+- `--contrastive-weight`：对比损失权重
+  - `0.0`：禁用对比损失（默认）
+  - `0.1`：轻量辅助损失（推荐）
+  - `1.0`：与交叉熵等权重
+  - `>1.0`：更注重特征学习
+- `--contrastive-temperature`：温度参数
+  - `0.05-0.1`：较严格的学习
+  - `0.1-0.2`：较平滑的学习
+
+#### 效果预期
+
+- **特征质量提升**：聚类和检索性能改善
+- **分类准确率提升**：尤其在细粒度风格区分上
+- **训练稳定性**：对比损失提供额外的正则化
+- **推理兼容性**：不影响现有推理流程
+
+#### 向量量化增强（VQ-VAE风格）
+
+从 v1.2.0 开始，支持在对比损失中集成**向量量化（Vector Quantization）**，实现VQ-VAE风格的离散特征学习。
+
+**VQ机制原理：**
+- **代码本学习**：维护一个离散的向量集合（codebook）
+- **量化映射**：将连续特征映射到最近的代码本向量
+- **直通梯度**：使用直通梯度估计解决离散变量的梯度问题
+- **联合优化**：同时优化重建损失、VQ损失和承诺损失
+
+**使用方法：**
+
+```powershell
+# 启用VQ增强的对比学习
+python train_artist_style.py ^
+  --model lsnet_t_artist ^
+  --data-path D:\datasets\artist_dataset ^
+  --output-dir D:\experiments\lsnet_t_vq ^
+  --batch-size 128 ^
+  --epochs 300 ^
+  --contrastive-loss ^
+  --contrastive-weight 0.1 ^
+  --use-vq ^
+  --vq-num-embeddings 512 ^
+  --vq-commitment-cost 0.1
+```
+
+**VQ参数说明：**
+- `--use-vq`：启用向量量化
+- `--vq-num-embeddings`：代码本大小（建议256-1024，根据类别数调整）
+- `--vq-commitment-cost`：承诺损失权重（建议0.1-0.5）
+
+**VQ增强效果：**
+- **离散表示**：学习更紧凑的类别原型
+- **聚类友好**：离散特征更适合聚类算法
+- **存储高效**：可以用索引代替连续向量
+- **泛化能力**：减少过拟合风险
 
 ### 多卡训练（分布式启动）
 
@@ -416,7 +515,6 @@ torchrun --standalone --nnodes=1 --nproc_per_node=8 train_artist_style.py \
 - 聚类模式生成的 `features.npy` 可直接接入 Faiss、Milvus 等相似度检索系统。
 - 如需扩展新的画师类别，重复执行“数据准备 → 训练 → 推理”流程即可。
 
-祝你使用顺利！如果流程中遇到新的需求或问题，欢迎继续反馈。
 # [LSNet: See Large, Focus Small](https://arxiv.org/abs/2503.23135)
 
 
