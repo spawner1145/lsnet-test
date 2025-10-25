@@ -161,7 +161,7 @@ if __name__ == "__main__":
     parser.add_argument("--class-mapping", required=True, help="CSV file with class_id,class_name columns")
     parser.add_argument("--inputs", nargs="+", required=True, help="Image files or directories")
     parser.add_argument("--output", default="", help="Optional JSON output path")
-    parser.add_argument("--model", default="lsnet_t_artist", choices=["lsnet_t_artist", "lsnet_s_artist", "lsnet_b_artist"])
+    parser.add_argument("--model", default="lsnet_t_artist", choices=["lsnet_t_artist", "lsnet_s_artist", "lsnet_b_artist", "lsnet_l_artist", "lsnet_xl_artist", "lsnet_xl_artist_448"])
     parser.add_argument("--input-size", type=int, default=224)
     parser.add_argument("--feature-dim", type=int, default=None)
     parser.add_argument("--use-projection", action="store_true", default=True)

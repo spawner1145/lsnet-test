@@ -188,7 +188,7 @@ def get_args_parser():
     parser.add_argument("--no-pin-mem", dest="pin_mem", action="store_false")
 
     parser.add_argument("--model", default="lsnet_t_artist", type=str,
-                        choices=["lsnet_t_artist", "lsnet_s_artist", "lsnet_b_artist"],
+                        choices=["lsnet_t_artist", "lsnet_s_artist", "lsnet_b_artist", "lsnet_l_artist", "lsnet_xl_artist", "lsnet_xl_artist_448"],
                         help="Model architecture")
     parser.add_argument("--input-size", default=224, type=int, help="Input image size")
     parser.add_argument("--feature-dim", default=None, type=int, help="Feature dimension for projection head")

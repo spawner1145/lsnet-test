@@ -159,7 +159,7 @@ def get_args_parser():
     
     # 模型参数
     parser.add_argument('--model', default='lsnet_t_artist', type=str, 
-                        choices=['lsnet_t_artist', 'lsnet_s_artist', 'lsnet_b_artist', 'lsnet_l_artist', 'lsnet_xl_artist'],
+                        choices=['lsnet_t_artist', 'lsnet_s_artist', 'lsnet_b_artist', 'lsnet_l_artist', 'lsnet_xl_artist', 'lsnet_xl_artist_448'],
                         help='Model architecture')
     parser.add_argument('--input-size', default=224, type=int, 
                         help='Input image size')

@@ -29,7 +29,7 @@ def parse_args():
     parser.add_argument('--images-dir', type=str, default=None,
                         help='待聚类的图像文件夹路径（将对所有支持的图像进行特征提取并聚类）')
     parser.add_argument('--model', type=str, default='lsnet_t_artist',
-                        choices=['lsnet_t_artist', 'lsnet_s_artist', 'lsnet_b_artist'],
+                        choices=['lsnet_t_artist', 'lsnet_s_artist', 'lsnet_b_artist', 'lsnet_l_artist', 'lsnet_xl_artist', 'lsnet_xl_artist_448'],
                         help='用于特征提取的模型名称')
     parser.add_argument('--checkpoint', type=str, default=None,
                         help='模型 checkpoint 路径（提取特征或分类需提供）')

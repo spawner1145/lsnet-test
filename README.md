@@ -92,12 +92,13 @@ python train_artist_style.py ^
 
 常用参数说明：
 
-- `--model`：可选 `lsnet_t_artist`、`lsnet_s_artist`、`lsnet_b_artist`、`lsnet_l_artist`，你可以在`model\lsnet_artist.py`里面自己改参数加预设
+- `--model`：可选 `lsnet_t_artist`、`lsnet_s_artist`、`lsnet_b_artist`、`lsnet_l_artist`、`lsnet_xl_artist`、`lsnet_xl_artist_448`，你可以在`model\lsnet_artist.py`里面自己改参数加预设
   - `lsnet_t_artist`: Tiny模型，参数量约11.4M，适合快速实验
   - `lsnet_s_artist`: Small模型，参数量约16.1M，平衡性能和效率
   - `lsnet_b_artist`: Base模型，参数量约23.2M，更好的性能
   - `lsnet_l_artist`: Large模型，参数量约50M+，适合大规模训练和更高精度需求
   - `lsnet_xl_artist`: Extra Large模型，参数量约100M+，专门用于处理100万+图片、10万+类别的大数据集
+  - `lsnet_xl_artist_448`: Extra Large模型（448x448输入），参数量约100M+，专门用于处理大数据集、5万+类别的高分辨率训练
 - `--eval-every`：每隔多少个epoch进行一次评估（默认：1，每epoch都评估）
 - `--save-every`：每隔多少个epoch保存一次checkpoint（默认：None，仅保存最终和最佳checkpoint）
 - `--finetune`：在验证阶段将图像等比缩放至训练分辨率，适用于迁移学习微调

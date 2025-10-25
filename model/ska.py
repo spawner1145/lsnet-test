@@ -1,9 +1,13 @@
+import logging
+import math
+
 import torch
-from torch.autograd import Function
+import torch.nn.functional as F
 import triton
 import triton.language as tl
-from torch.amp import custom_fwd, custom_bwd
-import math
+from torch.amp import custom_bwd, custom_fwd
+from torch.autograd import Function
+
 
 def _grid(numel: int, bs: int) -> tuple:
     return (triton.cdiv(numel, bs),)
@@ -163,6 +167,54 @@ class SkaFn(Function):
 
         return gx, gw, None, None
 
+class PyTorchSkaFn(Function):
+    @staticmethod
+    def forward(ctx, x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+        ks = int(math.sqrt(w.shape[2]))
+        pad = (ks - 1) // 2
+
+        n, ic, h, width = x.shape
+        wc = w.shape[1]
+        x_unfolded = F.unfold(x, kernel_size=ks, padding=pad)
+
+        x_unfolded = x_unfolded.view(n, ic, ks * ks, h * width)
+
+        w = w.view(n, wc, ks * ks, h * width)
+
+        if ic != wc:
+            repeats = ic // wc
+            w = w.repeat(1, repeats, 1, 1)
+
+        output = (x_unfolded * w).sum(dim=2)
+
+        output = output.view(n, ic, h, width)
+
+        return output
+
+
 class SKA(torch.nn.Module):
+    _fallback_logged = False
+
     def forward(self, x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
-        return SkaFn.apply(x, w) # type: ignore
+        try:
+            return SkaFn.apply(x, w)  # type: ignore
+        except Exception as e:
+            msg = str(e)
+            logger = logging.getLogger(__name__)
+            if "Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)" in msg:
+                if not SKA._fallback_logged:
+                    logger.info(
+                        "SkaFn requires GPU due to Triton; CPU input detected. "
+                        f"Using PyTorchSkaFn fallback. (Error message: {msg})",
+                        exc_info=False,
+                    )
+                    SKA._fallback_logged = True
+            else:
+                if not SKA._fallback_logged:
+                    logger.info(
+                        "SkaFn failed; falling back to PyTorchSkaFn. "
+                        f"(This issue is likely due to a bad Triton setup but can usually be ignored) Error: {msg}",
+                        exc_info=False,
+                    )
+                    SKA._fallback_logged = True
+            return PyTorchSkaFn.apply(x, w)  # type: ignore

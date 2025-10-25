@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--images-dir', required=True, type=str,
                         help='包含图像的文件夹路径，将对其中所有支持格式的图像提取特征并聚类')
     parser.add_argument('--model', default='lsnet_t_artist', type=str,
-                        choices=['lsnet_t_artist', 'lsnet_s_artist', 'lsnet_b_artist'],
+                        choices=['lsnet_t_artist', 'lsnet_s_artist', 'lsnet_b_artist', 'lsnet_l_artist', 'lsnet_xl_artist', 'lsnet_xl_artist_448'],
                         help='用于特征提取的模型名称')
     parser.add_argument('--checkpoint', required=True, type=str,
                         help='模型 checkpoint 路径')

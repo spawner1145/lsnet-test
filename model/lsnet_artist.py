@@ -154,6 +154,7 @@ default_cfgs_artist = dict(
     lsnet_b_artist = _cfg_artist(),
     lsnet_l_artist = _cfg_artist(),  # Large model for massive training
     lsnet_xl_artist = _cfg_artist(), # Extra Large model for 100k+ classes
+    lsnet_xl_artist_448 = _cfg_artist(), # Extra Large model with 448x448 input for massive datasets with 50k+ classes
 )
 
 
@@ -265,6 +266,27 @@ def lsnet_xl_artist(num_classes=1000, distillation=False, pretrained=False,
         num_classes=num_classes, 
         distillation=distillation,
         img_size=224,
+        patch_size=8,
+        embed_dim=[192, 384, 576, 768],  # 超大embed_dim，支持10万+类别
+        depth=[8, 12, 16, 20],           # 超深网络，学习复杂特征
+        num_heads=[6, 6, 6, 6],           # 更多注意力头
+        feature_dim=feature_dim,
+        use_projection=use_projection,
+        **kwargs
+    )
+    return model
+
+
+@register_model
+def lsnet_xl_artist_448(num_classes=50000, distillation=False, pretrained=False,
+                        feature_dim=None, use_projection=True, **kwargs):
+    """LSNet-XL-448 for Artist Style Classification (Extra Large model with 448x448 input for massive datasets with 50k+ classes)"""
+    model = _create_lsnet_artist(
+        "lsnet_xl_artist_448",
+        pretrained=pretrained,
+        num_classes=num_classes, 
+        distillation=distillation,
+        img_size=448,
         patch_size=8,
         embed_dim=[192, 384, 576, 768],  # 超大embed_dim，支持10万+类别
         depth=[8, 12, 16, 20],           # 超深网络，学习复杂特征
