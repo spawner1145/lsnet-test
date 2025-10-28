@@ -27,7 +27,7 @@ def get_args_parser():
     
     # 模型参数
     parser.add_argument('--model', default='lsnet_t_artist', type=str,
-                        choices=['lsnet_t_artist', 'lsnet_s_artist', 'lsnet_b_artist', 'lsnet_l_artist', 'lsnet_xl_artist'],
+                        choices=['lsnet_t_artist', 'lsnet_s_artist', 'lsnet_b_artist', 'lsnet_l_artist', 'lsnet_xl_artist', 'lsnet_xl_artist_448'],
                         help='Model architecture')
     parser.add_argument('--checkpoint', required=True, type=str,
                         help='Path to model checkpoint')
@@ -403,6 +403,15 @@ def process_directory(args, model, transform, class_mapping: Optional[Dict[int, 
 
 
 def main(args):
+    # 根据模型配置动态设置输入大小
+    from model.lsnet_artist import default_cfgs_artist
+    if args.model in default_cfgs_artist:
+        model_cfg = default_cfgs_artist[args.model]
+        configured_input_size = model_cfg.get('input_size', (3, 224, 224))[1]  # 获取高度（假设正方形）
+        if args.input_size != configured_input_size:
+            args.input_size = configured_input_size
+            print(f"Auto-setting input_size to {configured_input_size} for model {args.model} (from config)")
+    
     # 创建输出目录
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)

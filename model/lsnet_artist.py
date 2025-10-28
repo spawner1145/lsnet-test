@@ -148,13 +148,29 @@ def _cfg_artist(url='', **kwargs):
     }
 
 
+def _cfg_artist_448(url='', **kwargs):
+    return {
+        'url': url,
+        'num_classes': 50000, 
+        'input_size': (3, 448, 448), 
+        'pool_size': (4, 4),
+        'crop_pct': .9, 
+        'interpolation': 'bicubic',
+        'mean': (0.485, 0.456, 0.406), 
+        'std': (0.229, 0.224, 0.225),
+        'first_conv': 'patch_embed.0.c', 
+        'classifier': ('head.linear', 'head_dist.linear'),
+        **kwargs
+    }
+
+
 default_cfgs_artist = dict(
     lsnet_t_artist = _cfg_artist(),
     lsnet_s_artist = _cfg_artist(),
     lsnet_b_artist = _cfg_artist(),
     lsnet_l_artist = _cfg_artist(),  # Large model for massive training
     lsnet_xl_artist = _cfg_artist(), # Extra Large model for 100k+ classes
-    lsnet_xl_artist_448 = _cfg_artist(), # Extra Large model with 448x448 input for massive datasets with 50k+ classes
+    lsnet_xl_artist_448 = _cfg_artist_448(), # Extra Large model with 448x448 input for massive datasets with 50k+ classes
 )
 
 

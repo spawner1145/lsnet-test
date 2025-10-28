@@ -327,6 +327,15 @@ def evaluate_multilabel(data_loader, model, device, threshold: float = 0.5):
 
 def main(args):
     utils.init_distributed_mode(args)
+    
+    # 根据模型配置动态设置输入大小
+    from model.lsnet_artist import default_cfgs_artist
+    if args.model in default_cfgs_artist:
+        model_cfg = default_cfgs_artist[args.model]
+        configured_input_size = model_cfg.get('input_size', (3, 224, 224))[1]  # 获取高度（假设正方形）
+        if args.input_size != configured_input_size:
+            args.input_size = configured_input_size
+            print(f"Auto-setting input_size to {configured_input_size} for model {args.model} (from config)")
 
     print(args)
 
