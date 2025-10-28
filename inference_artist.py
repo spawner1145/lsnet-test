@@ -35,6 +35,8 @@ def get_args_parser():
                         help='Number of classes. If omitted, will try to infer from checkpoint or CSV mapping.')
     parser.add_argument('--feature-dim', default=None, type=int,
                         help='Feature dimension')
+    parser.add_argument('--input-size', default=224, type=int,
+                        help='Input image size')
     
     # 推理模式
     parser.add_argument('--mode', default='classify', type=str,
@@ -432,7 +434,7 @@ def main(args):
     model = load_model(args, state_dict)
     
     # 创建数据转换
-    config = resolve_data_config({}, model=model)
+    config = resolve_data_config({'input_size': (3, args.input_size, args.input_size)}, model=model)
     transform = create_transform(**config)
     
     # 判断输入类型
