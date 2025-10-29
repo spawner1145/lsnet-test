@@ -316,6 +316,8 @@ def get_args_parser():
                         help='Evaluate every N epochs (default: 1, evaluate every epoch)')
     parser.add_argument('--save-every', default=None, type=int,
                         help='Save checkpoint every N epochs (default: None, only save final and best checkpoints)')
+    parser.add_argument('--save-last', action='store_true', default=True,
+                        help='Save checkpoint at the end of every epoch (for resuming interrupted training)')
 
     return parser
 
@@ -501,6 +503,11 @@ def main(args):
     
     # output_dir 已确保在上方创建
     
+    # 自动检测last_checkpoint进行恢复
+    if not args.resume and args.output_dir and (Path(args.output_dir) / 'last_checkpoint.pth').exists():
+        args.resume = str(Path(args.output_dir) / 'last_checkpoint.pth')
+        print(f"Auto-resuming from last checkpoint: {args.resume}")
+    
     # 恢复训练
     if args.resume:
         if args.resume.startswith('https'):
@@ -572,6 +579,20 @@ def main(args):
                     'args': args,
                 }, checkpoint_path)
             print(f"Saved checkpoint at epoch {epoch + 1}")
+        
+        # 保存最新epoch的checkpoint（用于中断恢复）
+        if args.output_dir and args.save_last:
+            checkpoint_paths = [output_dir / 'last_checkpoint.pth']
+            for checkpoint_path in checkpoint_paths:
+                utils.save_on_master({
+                    'model': model_without_ddp.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'lr_scheduler': lr_scheduler.state_dict(),
+                    'epoch': epoch,
+                    'model_ema': get_state_dict(model_ema) if model_ema is not None else None,
+                    'scaler': loss_scaler.state_dict(),
+                    'args': args,
+                }, checkpoint_path)
         
         # 保存最佳模型（不受save-interval影响）
         if args.output_dir and test_stats is not None and test_stats["acc1"] >= max_accuracy:
