@@ -17,12 +17,13 @@ def parse_log_file(log_path):
             if line:
                 try:
                     data = json.loads(line)
-                    epochs.append(data['epoch'])
-                    train_lr.append(data['train_lr'])
-                    train_loss.append(data['train_loss'])
-                    test_loss.append(data['test_loss'])
-                    test_acc1.append(data['test_acc1'])
-                    test_acc5.append(data['test_acc5'])
+                    if 'test_loss' in data:
+                        epochs.append(data['epoch'])
+                        train_lr.append(data['train_lr'])
+                        train_loss.append(data['train_loss'])
+                        test_loss.append(data['test_loss'])
+                        test_acc1.append(data['test_acc1'])
+                        test_acc5.append(data['test_acc5'])
                 except json.JSONDecodeError:
                     continue
 
@@ -37,6 +38,7 @@ def parse_log_file(log_path):
 
 def create_plots(data, output_dir):
     epochs = data['epochs']
+    steps = range(len(epochs))
 
     plt.rcParams['font.family'] = 'DejaVu Sans'
     plt.rcParams['axes.unicode_minus'] = False
@@ -44,24 +46,24 @@ def create_plots(data, output_dir):
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
     fig.suptitle('LSNet Classification Training Results', fontsize=16, fontweight='bold')
 
-    ax1.plot(epochs, data['train_loss'], 'b-', label='Training Loss', linewidth=2)
-    ax1.plot(epochs, data['test_loss'], 'r-', label='Validation Loss', linewidth=2)
-    ax1.set_xlabel('Epoch')
+    ax1.plot(steps, data['train_loss'], 'b-', label='Training Loss', linewidth=2)
+    ax1.plot(steps, data['test_loss'], 'r-', label='Validation Loss', linewidth=2)
+    ax1.set_xlabel('Step')
     ax1.set_ylabel('Loss')
     ax1.set_title('Training and Validation Loss')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
-    ax2.plot(epochs, data['test_acc1'], 'g-', label='Top-1 Accuracy', linewidth=2)
-    ax2.plot(epochs, data['test_acc5'], 'orange', label='Top-5 Accuracy', linewidth=2)
-    ax2.set_xlabel('Epoch')
+    ax2.plot(steps, data['test_acc1'], 'g-', label='Top-1 Accuracy', linewidth=2)
+    ax2.plot(steps, data['test_acc5'], 'orange', label='Top-5 Accuracy', linewidth=2)
+    ax2.set_xlabel('Step')
     ax2.set_ylabel('Accuracy (%)')
     ax2.set_title('Validation Accuracy')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
 
-    ax3.plot(epochs, data['train_lr'], 'purple', linewidth=2)
-    ax3.set_xlabel('Epoch')
+    ax3.plot(steps, data['train_lr'], 'purple', linewidth=2)
+    ax3.set_xlabel('Step')
     ax3.set_ylabel('Learning Rate')
     ax3.set_title('Learning Rate Schedule')
     ax3.set_yscale('log')
@@ -71,13 +73,13 @@ def create_plots(data, output_dir):
     if len(epochs) > window_size:
         smooth_test_loss = np.convolve(data['test_loss'], np.ones(window_size)/window_size, mode='valid')
         smooth_test_acc1 = np.convolve(data['test_acc1'], np.ones(window_size)/window_size, mode='valid')
-        smooth_epochs = epochs[window_size-1:]
+        smooth_steps = range(window_size-1, len(epochs))
 
         ax4_twin = ax4.twinx()
-        line1 = ax4.plot(smooth_epochs, smooth_test_loss, 'r-', label='Validation Loss', linewidth=2)
-        line2 = ax4_twin.plot(smooth_epochs, smooth_test_acc1, 'g-', label='Top-1 Accuracy', linewidth=2)
+        line1 = ax4.plot(smooth_steps, smooth_test_loss, 'r-', label='Validation Loss', linewidth=2)
+        line2 = ax4_twin.plot(smooth_steps, smooth_test_acc1, 'g-', label='Top-1 Accuracy', linewidth=2)
 
-        ax4.set_xlabel('Epoch')
+        ax4.set_xlabel('Step')
         ax4.set_ylabel('Loss', color='r')
         ax4_twin.set_ylabel('Accuracy (%)', color='g')
         ax4.set_title(f'Loss vs Accuracy (Smoothed, window={window_size})')
@@ -97,10 +99,11 @@ def create_plots(data, output_dir):
 
 def create_detailed_plots(data, output_dir):
     epochs = data['epochs']
+    steps = range(len(epochs))
 
     plt.figure(figsize=(12, 8))
-    plt.plot(epochs, data['train_loss'], 'b-', linewidth=1.5, alpha=0.8)
-    plt.xlabel('Epoch', fontsize=12)
+    plt.plot(steps, data['train_loss'], 'b-', linewidth=1.5, alpha=0.8)
+    plt.xlabel('Step', fontsize=12)
     plt.ylabel('Training Loss', fontsize=12)
     plt.title('Training Loss Curve', fontsize=14, fontweight='bold')
     plt.grid(True, alpha=0.3)
@@ -108,8 +111,8 @@ def create_detailed_plots(data, output_dir):
     plt.close()
 
     plt.figure(figsize=(12, 8))
-    plt.plot(epochs, data['test_loss'], 'r-', linewidth=1.5, alpha=0.8)
-    plt.xlabel('Epoch', fontsize=12)
+    plt.plot(steps, data['test_loss'], 'r-', linewidth=1.5, alpha=0.8)
+    plt.xlabel('Step', fontsize=12)
     plt.ylabel('Validation Loss', fontsize=12)
     plt.title('Validation Loss Curve', fontsize=14, fontweight='bold')
     plt.grid(True, alpha=0.3)
@@ -117,8 +120,8 @@ def create_detailed_plots(data, output_dir):
     plt.close()
 
     plt.figure(figsize=(12, 8))
-    plt.plot(epochs, data['test_acc1'], 'g-', linewidth=1.5, alpha=0.8)
-    plt.xlabel('Epoch', fontsize=12)
+    plt.plot(steps, data['test_acc1'], 'g-', linewidth=1.5, alpha=0.8)
+    plt.xlabel('Step', fontsize=12)
     plt.ylabel('Top-1 Accuracy (%)', fontsize=12)
     plt.title('Top-1 Validation Accuracy', fontsize=14, fontweight='bold')
     plt.grid(True, alpha=0.3)
@@ -126,8 +129,8 @@ def create_detailed_plots(data, output_dir):
     plt.close()
 
     plt.figure(figsize=(12, 8))
-    plt.plot(epochs, data['test_acc5'], 'orange', linewidth=1.5, alpha=0.8)
-    plt.xlabel('Epoch', fontsize=12)
+    plt.plot(steps, data['test_acc5'], 'orange', linewidth=1.5, alpha=0.8)
+    plt.xlabel('Step', fontsize=12)
     plt.ylabel('Top-5 Accuracy (%)', fontsize=12)
     plt.title('Top-5 Validation Accuracy', fontsize=14, fontweight='bold')
     plt.grid(True, alpha=0.3)
@@ -167,7 +170,7 @@ def print_statistics(data):
     print(f"  Top-5 accuracy: {np.mean(test_acc5[final_50_epochs]):.2f}% ± {np.std(test_acc5[final_50_epochs]):.2f}%")
 
 def main():
-    log_path = Path("output/log.txt")
+    log_path = Path("log.txt")
     output_dir = Path("output/plots")
     output_dir.mkdir(exist_ok=True)
 
